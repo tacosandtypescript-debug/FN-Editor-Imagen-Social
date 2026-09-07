@@ -1,0 +1,10 @@
+.venv/
+**/xenv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.token
+*.session
+*.log
+.DS_Store

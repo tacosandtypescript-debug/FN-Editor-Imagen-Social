@@ -1,0 +1,33 @@
+{
+  "canvas": {"width": 1080, "height": 1920},
+  "gap": 32,
+  "font": "/home/isaac/.local/share/fonts/Barlow-BlackItalic.ttf",
+  "font_size": 72,
+  "text_color": "#FFFFFF",
+  "outline_width": 6,
+  "foreground_max_width": 1000,
+  "foreground_max_height": 1120,
+  "corner_radius": 54,
+  "grid_gap": 24,
+  "grid_padding": 60,
+  "text_margin": 60,
+  "outer_margin": 90,
+  "watermark": {
+    "text": "CÓDIGO: KHETZALGG",
+    "size": 46,
+    "opacity": 125,
+    "bottom_margin": 145
+  },
+  "text_shadow": {
+    "blur": 14,
+    "offset": [3, 5],
+    "opacity": 72
+  },
+  "shadow": {
+    "blur": 86,
+    "offset": [8, 24],
+    "opacity": 68
+  },
+  "background_blur": 16,
+  "background_dim": 0.92
+}
