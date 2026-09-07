@@ -1,11 +1,12 @@
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
-src = Path('/home/isaac/editimg_work/jobs/power_hours_base.jpg')
-out = Path('/home/isaac/editimg_work/jobs/power_hours_card_complete.jpg')
+ROOT = Path(__file__).resolve().parents[1]
+src = ROOT / 'jobs' / 'power_hours_base.jpg'
+out = ROOT / 'jobs' / 'power_hours_card_complete.jpg'
 im = Image.open(src).convert('RGBA')
 d = ImageDraw.Draw(im, 'RGBA')
-font_path = '/home/isaac/.local/share/fonts/Barlow-BlackItalic.ttf'
+font_path = ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'
 font = ImageFont.truetype(font_path, 25)
 head = ImageFont.truetype(font_path, 30)
 small = ImageFont.truetype(font_path, 22)

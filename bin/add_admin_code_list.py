@@ -1,7 +1,10 @@
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
-im=Image.open('/home/isaac/editimg_work/jobs/admin_codes_base.png').convert('RGBA')
-d=ImageDraw.Draw(im,'RGBA'); fp='/home/isaac/.local/share/fonts/Barlow-BlackItalic.ttf'
+
+ROOT = Path(__file__).resolve().parents[1]
+JOBS = ROOT / 'jobs'
+im=Image.open(JOBS / 'admin_codes_base.png').convert('RGBA')
+d=ImageDraw.Draw(im,'RGBA'); fp=ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'
 font=ImageFont.truetype(fp,19); head=ImageFont.truetype(fp,25)
 white=(255,255,255,255); gold=(255,209,102,255); purple=(139,61,255,255)
 # Lista completa resumida solo en la separación visual, conservando todos los códigos y recompensas.
@@ -17,4 +20,4 @@ for ci,col in enumerate(cols):
   d.text((x,y),code,font=font,fill=gold,stroke_width=1,stroke_fill=(0,0,0,230))
   d.text((x,y+20),reward,font=font,fill=white,stroke_width=1,stroke_fill=(0,0,0,230))
   y+=42
-out='/home/isaac/editimg_work/jobs/admin_codes_card.png'; im.convert('RGB').save(out,format='PNG',compress_level=0); print(out)
+out=JOBS / 'admin_codes_card.png'; im.convert('RGB').save(out,format='PNG',compress_level=0); print(out)

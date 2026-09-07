@@ -1,7 +1,7 @@
 {
   "canvas": {"width": 1080, "height": 1920},
   "gap": 32,
-  "font": "/home/isaac/.local/share/fonts/Barlow-BlackItalic.ttf",
+  "font": "barlow_font/Barlow-BlackItalic.ttf",
   "font_size": 72,
   "text_color": "#FFFFFF",
   "outline_width": 6,
@@ -24,9 +24,9 @@
     "opacity": 72
   },
   "shadow": {
-    "blur": 86,
-    "offset": [8, 24],
-    "opacity": 68
+    "blur": 28,
+    "offset": [-8, 12],
+    "opacity": 48
   },
   "background_blur": 16,
   "background_dim": 0.92

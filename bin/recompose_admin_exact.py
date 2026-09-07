@@ -1,14 +1,16 @@
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pathlib import Path
 W,H=1080,1920
-src=Image.open('/home/isaac/editimg_work/jobs/admin_codes.jpg').convert('RGB')
+ROOT = Path(__file__).resolve().parents[1]
+JOBS = ROOT / 'jobs'
+src=Image.open(JOBS / 'admin_codes.jpg').convert('RGB')
 # Fondo blur cover
 scale=max(W/src.width,H/src.height)
 bg=src.resize((round(src.width*scale),round(src.height*scale)),Image.Resampling.LANCZOS)
 l=(bg.width-W)//2; t=(bg.height-H)//2
 bg=bg.crop((l,t,l+W,t+H)).filter(ImageFilter.GaussianBlur(28)).convert('RGBA')
 d=ImageDraw.Draw(bg,'RGBA')
-font_path='/home/isaac/.local/share/fonts/Barlow-BlackItalic.ttf'
+font_path=ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'
 white=(255,255,255,255); gold=(255,209,102,255); purple=(139,61,255,255); orange=(255,122,0,255)
 def font(size): return ImageFont.truetype(font_path,size)
 def centered(text,y,f,fill=white,stroke=6):
@@ -57,6 +59,6 @@ for col,x in enumerate((110,580)):
 # Código de creador en caja x250,y1670,w580,h70
 wf=font(60); wm='CÓDIGO: KHETZALGG'; bb=d.textbbox((0,0),wm,font=wf,stroke_width=2)
 d.text(((W-(bb[2]-bb[0]))//2,1670),wm,font=wf,fill=(255,255,255,190),stroke_width=2,stroke_fill=(0,0,0,150))
-out='/home/isaac/editimg_work/jobs/admin_codes_card.png'
+out=JOBS / 'admin_codes_card.png'
 bg.convert('RGBA').save(out,format='PNG',compress_level=0)
 print(out)

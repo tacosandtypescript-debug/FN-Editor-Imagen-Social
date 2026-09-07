@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Compone una imagen vertical 9:16 (1080x1920) con fondo cover blur, uno o
-varios sujetos (collage 2-4 imagenes), esquinas redondeadas, sombra exterior de
+"""Compone una imagen vertical configurable con fondo cover blur, uno o
+varios sujetos (collage de 2+ imagenes), esquinas redondeadas, sombra exterior de
 dos capas y texto superior/inferior segmentado con palabras de color.
 
 Uso:
-  compose_image.py imagen1.jpg [imagen2.jpg ...] salida.jpg \
-      --top 'TEXTO {CLAVE|FFFFFF}' --bottom '...' [--preset preset.json] [--style auto]
+  compose_image.py imagen1.jpg [imagen2.jpg ...] salida.png \
+      --top 'TEXTO {CLAVE|FFFFFF}' --bottom '...' [--preset preset.json]
 
 El ULTIMO argumento posicional es la salida; todos los anteriores son imagenes
-de entrada (1 = tarjeta simple, 2-4 = collage).
+de entrada (1 = tarjeta simple, 2+ = collage).
 
 Estilos de collage (--style):
   auto         -> elige segun N y proporcion de la primera imagen (defecto)
-  grid         -> cuadricula uniforme (legacy, contain exacto)
+  grid         -> cuadricula uniforme para cualquier numero de imagenes
+  adaptive     -> clasifica cada imagen (horizontal/cuadrada/vertical) y le
+                  asigna una celda 16:9, 1:1 o 9:16 conservando el orden
   bento        -> bloques cuadrados y rectangulares de distintos tamanos, con
                   huecos de diseno (muy ordenado/moderno)
   mosaico      -> celdas que encajan sin espacios, filas de distinta altura
@@ -22,7 +24,7 @@ Estilos de collage (--style):
 
 El calculo de texto/posiciones es el mismo para todos los estilos; cada celda
 rellena su rectangulo con cover centrado (nunca deforma; recorta los bordes
-justos). La tarjeta simple (1 imagen) y --style grid conservan contain.
+justos). Usa --fit contain para conservar la imagen completa en cada celda.
 """
 import argparse, json, math, re, sys
 from pathlib import Path
@@ -52,12 +54,12 @@ def _lay():
                              (0.70, 0.34, 0.30, 0.66)])
     L[("bento", 4)] = (1.0, [(0, 0, 0.66, 0.66), (0.70, 0, 0.30, 0.30),
                              (0.70, 0.34, 0.30, 0.66), (0, 0.70, 0.66, 0.30)])
-    # Mosaico: filas que encajan sin espacios (celdas uniformes por fila).
+    # Mosaico: filas compactas con separación visual (celdas uniformes por fila).
     L[("mosaico", 2)] = (1.0, [(0, 0, 0.5, 1.0), (0.5, 0, 0.5, 1.0)])
     L[("mosaico", 3)] = (1.0, [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.54, 1.0, 0.46)])
     L[("mosaico", 4)] = (1.0, [(0, 0, 0.33, 0.5), (0.37, 0, 0.33, 0.5),
                                (0.74, 0, 0.26, 0.5), (0, 0.54, 1.0, 0.46)])
-    # Puzzle: piezas desiguales encajadas sin huecos.
+    # Puzzle: piezas rectangulares desiguales con separación visual.
     L[("puzzle", 2)] = (1.0, [(0, 0, 0.55, 0.85), (0.59, 0.15, 0.41, 0.85)])
     L[("puzzle", 3)] = (1.0, [(0, 0, 0.6, 0.6), (0.64, 0, 0.36, 0.6), (0, 0.64, 1.0, 0.36)])
     L[("puzzle", 4)] = (1.0, [(0, 0, 0.6, 0.6), (0.64, 0, 0.36, 0.36),
@@ -65,45 +67,146 @@ def _lay():
     return L
 
 LAYOUTS = _lay()
-STYLES = ("grid", "bento", "mosaico", "puzzle", "jerarquico", "asimetrico")
+STYLES = ("grid", "adaptive", "bento", "mosaico", "puzzle", "jerarquico", "asimetrico")
+
+
+def aspect_bucket(size):
+    """Classify a source image and choose its canonical cell aspect ratio."""
+    ratio = size[0] / size[1]
+    if ratio >= 1.25:
+        return "landscape", 16 / 9
+    if ratio <= 0.8:
+        return "portrait", 9 / 16
+    return "square", 1.0
+
+
+def adaptive_layout(
+    images, canvas_width, content_width, max_height, gap,
+    stack_square_pair=False,
+):
+    """Create justified rows whose cells follow each image's orientation.
+
+    The order of the source images is preserved. Each row is laid out like a
+    contact sheet: horizontal images get 16:9 cells, square images 1:1 cells,
+    and vertical images 9:16 cells. Rows are scaled together if needed.
+    """
+    max_height = max(float(max_height), 1.0)
+    gap = max(float(gap), 0.0)
+    items = []
+    for index, image in enumerate(images):
+        bucket, aspect = aspect_bucket(image.size)
+        items.append({"index": index, "bucket": bucket, "aspect": aspect})
+
+    average_aspect = sum(item["aspect"] for item in items) / len(items)
+    target_height = math.sqrt(
+        max(content_width, 1) * max(max_height, 1) /
+        max(len(items) * average_aspect, 1)
+    )
+    target_height = max(180.0, min(480.0, target_height))
+    break_below = target_height * 0.78
+
+    if stack_square_pair:
+        rows = [[item] for item in items]
+    else:
+        rows = []
+        current = []
+        for item in items:
+            candidate = current + [item]
+            natural_height = (
+                content_width - gap * (len(candidate) - 1)
+            ) / sum(part["aspect"] for part in candidate)
+            if current and natural_height < break_below:
+                rows.append(current)
+                current = [item]
+            else:
+                current = candidate
+        if current:
+            rows.append(current)
+
+    row_heights = []
+    for row in rows:
+        natural_height = (
+            content_width - gap * (len(row) - 1)
+        ) / sum(item["aspect"] for item in row)
+        row_heights.append(min(natural_height, max_height))
+
+    # Reserve the inter-row gaps before scaling the rows. Otherwise the cells
+    # fit individually but the last row can still overflow the safe area.
+    row_gap = min(
+        gap,
+        max(0.0, (max_height - len(rows)) / max(1, len(rows) - 1)),
+    )
+    gap_total = row_gap * max(0, len(rows) - 1)
+    row_sum = sum(row_heights)
+    if row_sum + gap_total > max_height:
+        available_height = max(1.0, max_height - gap_total)
+        scale = available_height / max(row_sum, 1.0)
+        row_heights = [height * scale for height in row_heights]
+    total_height = sum(row_heights) + gap_total
+
+    content_x = (canvas_width - content_width) / 2
+    cells = [None] * len(images)
+    y = 0.0
+    for row, row_height in zip(rows, row_heights):
+        row_width = sum(item["aspect"] * row_height for item in row)
+        row_width += gap * max(0, len(row) - 1)
+        x = content_x + (content_width - row_width) / 2
+        for item in row:
+            width = item["aspect"] * row_height
+            cells[item["index"]] = (x, y, width, row_height)
+            x += width + gap
+        y += row_height + row_gap
+    return cells, total_height
 
 def auto_style(N, ratio):
-    """Seleccion automatica: N y proporcion de la primera imagen."""
-    if N <= 2:
-        return "grid"          # 2 imagenes: se mantiene el grid adaptativo
-    if N == 3:
-        if ratio >= 1.15: return "jerarquico"
-        if ratio <= 0.85: return "asimetrico"
-        return "mosaico"
-    # N == 4
-    if ratio >= 1.30: return "jerarquico"
-    if ratio <= 0.85: return "asimetrico"
-    return "bento"
+    """Seleccion automatica basada en la orientacion de cada fuente."""
+    if N > 1:
+        return "adaptive"
+    return "grid"
 
 def grid_dims(N, ratio):
+    """Choose a balanced grid for N images and a target area ratio."""
     if N == 1:
         return 1, 1
-    if ratio >= 1.2:
-        return 1, N
-    if ratio <= 0.8:
-        return N, 1
-    if N == 2:
-        return 1, 2
-    if N == 3:
-        return 3, 1
-    return 2, 2
+    ratio = max(float(ratio), 0.01)
+    best = None
+    for cols in range(1, N + 1):
+        rows = math.ceil(N / cols)
+        grid_ratio = cols / rows
+        empty = cols * rows - N
+        score = abs(math.log(grid_ratio / ratio)) + empty * 0.55
+        candidate = (score, empty, abs(cols - rows), cols, rows)
+        if best is None or candidate < best[0]:
+            best = (candidate, cols, rows)
+    return best[1], best[2]
+
+
+def format_dimensions(value, default=(1080, 1920)):
+    """Resolve a ratio such as 1:1, 4:5, 16:9 or 9:16 to pixels."""
+    if not value:
+        return int(default[0]), int(default[1])
+    match = re.fullmatch(r"\s*(\d+)\s*[:x/]\s*(\d+)\s*", str(value))
+    if not match:
+        raise ValueError("el formato debe ser PROPORCION, por ejemplo 1:1, 4:5 o 9:16")
+    aspect_w, aspect_h = int(match.group(1)), int(match.group(2))
+    if aspect_w <= 0 or aspect_h <= 0:
+        raise ValueError("la proporcion debe tener valores positivos")
+    short_edge = 1080
+    if aspect_w >= aspect_h:
+        return round(short_edge * aspect_w / aspect_h), short_edge
+    return short_edge, round(short_edge * aspect_h / aspect_w)
 
 # ── utilidades ──────────────────────────────────────────────────────────────
-def segments(s):
+def segments(s, default_color="#FFFFFF"):
     out = []; pos = 0
     for m in SEG.finditer(s):
         if m.start() > pos:
-            out.append((s[pos:m.start()], "#FFFFFF"))
+            out.append((s[pos:m.start()], default_color))
         out.append((m.group(1), "#" + m.group(2)))
         pos = m.end()
     if pos < len(s):
-        out.append((s[pos:], "#FFFFFF"))
-    return out or [(s, "#FFFFFF")]
+        out.append((s[pos:], default_color))
+    return out or [(s, default_color)]
 
 def font_for(path, size):
     if path:
@@ -116,34 +219,71 @@ def font_for(path, size):
     except OSError:
         return ImageFont.load_default()
 
-def text_width(draw, seg, font, stroke):
-    return sum(draw.textbbox((0, 0), t, font=font, stroke_width=stroke)[2] for t, _ in seg)
+def block_at_size(draw, text, cfg, size):
+    """Measure a multiline text block using one font size for every line."""
+    stroke = int(cfg.get("outline_width", 5))
+    default_color = cfg.get("text_color", "#FFFFFF")
+    font = font_for(cfg.get("font", ""), int(size))
+    parts = []
+    for line in text.split("\n"):
+        seg = segments(line, default_color)
+        boxes = [draw.textbbox((0, 0), t, font=font, stroke_width=stroke)
+                 for t, _ in seg]
+        widths = [box[2] for box in boxes]
+        parts.append({
+            "f": font,
+            "seg": seg,
+            "widths": widths,
+            "w": sum(widths),
+            "h": max(box[3] for box in boxes) - min(box[1] for box in boxes),
+        })
+    line_gap = int(cfg.get("line_gap", 10))
+    height = sum(part["h"] for part in parts) + line_gap * max(0, len(parts) - 1)
+    return {"parts": parts, "height": height, "size": int(size)}
 
-def fit_font(draw, text, cfg):
-    base = cfg.get("font_size", 60)
-    mini = cfg.get("min_font_size", 28)
-    limit = cfg.get("max_text_width", cfg["canvas"]["width"] - 2 * cfg.get("text_margin", 40))
-    stroke = cfg.get("outline_width", 5)
-    seg = segments(text)
-    f = font_for(cfg.get("font", ""), base)
-    w = text_width(draw, seg, f, stroke)
-    size = base
-    if w > limit and base > mini:
-        size = max(mini, min(base, int(base * limit / w)))
-        f = font_for(cfg.get("font", ""), size)
-        w = text_width(draw, seg, f, stroke)
-        while w > limit and size > mini:
-            size -= 1
-            f = font_for(cfg.get("font", ""), size)
-            w = text_width(draw, seg, f, stroke)
-    boxes = [draw.textbbox((0, 0), t, font=f, stroke_width=stroke) for t, _ in seg]
-    h = max(b[3] for b in boxes) - min(b[1] for b in boxes)
-    return f, seg, w, h, size
+
+def fit_block(draw, text, cfg):
+    """Fit every line horizontally while preserving one size per block."""
+    base = int(cfg.get("font_size", 60))
+    mini = int(cfg.get("min_font_size", 28))
+    limit = int(cfg.get("max_text_width", cfg["canvas"]["width"] - 2 * cfg.get("text_margin", 40)))
+    for size in range(base, mini - 1, -1):
+        block = block_at_size(draw, text, cfg, size)
+        if all(part["w"] <= limit for part in block["parts"]):
+            return block
+    raise ValueError(
+        f"el texto no cabe en {limit}px incluso con la fuente mínima ({mini}px); "
+        "divide el texto en más líneas"
+    )
 
 def draw_segments(im, seg, font, y, cfg, widths):
     draw = ImageDraw.Draw(im)
     stroke = cfg.get("outline_width", 5)
-    x = (im.width - sum(widths)) / 2
+    x0 = (im.width - sum(widths)) / 2
+
+    # Sombra independiente y difusa, separada del contorno negro del texto.
+    shadow_cfg = cfg.get("text_shadow", {})
+    shadow_opacity = max(0, min(255, int(shadow_cfg.get("opacity", 0))))
+    if shadow_opacity:
+        shadow_layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow_layer)
+        offset = shadow_cfg.get("offset", [0, 0])
+        off_x = int(offset[0]) if len(offset) > 0 else 0
+        off_y = int(offset[1]) if len(offset) > 1 else 0
+        x = x0
+        for (t, _), w in zip(seg, widths):
+            shadow_draw.text(
+                (int(x + off_x), int(y + off_y)), t, font=font,
+                fill=(0, 0, 0, shadow_opacity), stroke_width=stroke,
+                stroke_fill=(0, 0, 0, shadow_opacity),
+            )
+            x += w
+        blur = max(0, float(shadow_cfg.get("blur", 0)))
+        if blur:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(blur))
+        im.alpha_composite(shadow_layer)
+
+    x = x0
     for (t, c), w in zip(seg, widths):
         draw.text((int(x), int(y)), t, font=font, fill=c,
                   stroke_width=stroke, stroke_fill="#000000")
@@ -169,11 +309,25 @@ def draw_watermark(im, cfg):
     layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     box = d.textbbox((0, 0), text, font=font)
-    x = (im.width - (box[2] - box[0])) // 2
-    y = im.height - margin - (box[3] - box[1])
+    x = (im.width - (box[2] - box[0])) // 2 - box[0]
+    y = im.height - margin - box[3]
     d.text((x, y), text, font=font, fill=(255, 255, 255, opacity),
            stroke_width=1, stroke_fill=(0, 0, 0, max(0, opacity // 2)))
     im.alpha_composite(layer)
+
+
+def watermark_geometry(height, cfg):
+    """Return the visible watermark bounds so the layout can avoid it."""
+    wm = cfg.get("watermark", {})
+    text = wm.get("text", "")
+    if not text:
+        return None
+    font = font_for(wm.get("font", cfg.get("font", "")), int(wm.get("size", 46)))
+    layer = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    box = ImageDraw.Draw(layer).textbbox((0, 0), text, font=font)
+    margin = int(wm.get("bottom_margin", cfg.get("outer_margin", 90) + 55))
+    y = height - margin - box[3]
+    return {"top": y + box[1], "bottom": y + box[3], "font": font, "box": box}
 
 def place_shadow(bg, mask, x, y, blur, off_x, off_y, opacity):
     """Sombra exterior realmente difusa; se amplia la mascara antes del blur
@@ -241,144 +395,260 @@ def load_cfg(preset_path):
         "grid_gap": 24,
         "grid_padding": 60,
         "outer_margin": 90,
-        "shadow": {
-            "near_blur": 32, "near_offset": [4, 12], "near_opacity": 60,
-            "far_blur": 72, "far_offset": [16, 36], "far_opacity": 48,
-        },
+        "shadow": {"blur": 28, "offset": [-8, 12], "opacity": 48},
         "background_blur": 16,
         "background_dim": 0.92,
     }
     if preset_path:
-        with open(preset_path) as fh:
+        with open(preset_path, encoding="utf-8") as fh:
             defaults.update(json.load(fh))
+
+    # Resolve bundled fonts from the repository instead of depending on the
+    # absolute path of the machine that created the preset.
+    font_value = defaults.get("font", "")
+    if font_value:
+        font_path = Path(str(font_value))
+        if not font_path.is_absolute():
+            candidates = [Path.cwd() / font_path]
+            if preset_path:
+                candidates.append(Path(preset_path).resolve().parent / font_path)
+            candidates.append(Path(__file__).resolve().parents[1] / font_path)
+            for candidate in candidates:
+                if candidate.is_file():
+                    defaults["font"] = str(candidate)
+                    break
     return defaults
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("inputs", nargs="+", help="1-4 imagenes de entrada; el ULTIMO es la salida")
+    ap.add_argument("inputs", nargs="+", help="imagenes de entrada (1 o mas); el ULTIMO es la salida")
     ap.add_argument("--top", required=True)
     ap.add_argument("--bottom", required=True)
     ap.add_argument("--preset", default=None)
     ap.add_argument("--style", default="auto",
                     choices=("auto",) + STYLES,
                     help="estilo de collage (defecto: auto segun N y proporcion)")
+    ap.add_argument(
+        "--format", dest="output_format", default=None,
+        help="proporcion de salida, por ejemplo 1:1, 4:5, 16:9 o 9:16",
+    )
+    ap.add_argument(
+        "--fit", choices=("auto", "cover", "contain"), default="auto",
+        help="recorte por celda: auto usa contain para una imagen y cover para collages",
+    )
     a = ap.parse_args()
     if len(a.inputs) < 2:
         ap.error("hace falta al menos una imagen de entrada y una salida")
     *src_paths, out_path = a.inputs
-    if len(src_paths) > 4:
-        print("AVISO: mas de 4 imagenes; se usan las 4 primeras", flush=True)
-        src_paths = src_paths[:4]
-
     cfg = load_cfg(a.preset)
-    W, H = cfg["canvas"]["width"], cfg["canvas"]["height"]
+    try:
+        W, H = format_dimensions(
+            a.output_format,
+            (cfg["canvas"]["width"], cfg["canvas"]["height"]),
+        )
+    except ValueError as exc:
+        ap.error(str(exc))
+    cfg["canvas"] = {"width": W, "height": H}
     srcs = [Image.open(p).convert("RGB") for p in src_paths]
     N = len(srcs)
     ratio = srcs[0].width / srcs[0].height
+    orientation_buckets = {aspect_bucket(src.size)[0] for src in srcs}
+    if N > 1 and len({src.size for src in srcs}) > 1:
+        print(
+            "AVISO: las imagenes no tienen el mismo tamano; se ajustaran a su orientacion",
+            file=sys.stderr,
+            flush=True,
+        )
 
     style = auto_style(N, ratio) if a.style == "auto" else a.style
-    if style != "grid" and (style, N) not in LAYOUTS:
-        style = "grid"   # estilos nuevos solo 2-4 con layout definido; N=1 simple
+    if a.style == "auto" and (N >= 5 or len(orientation_buckets) > 1):
+        style = "adaptive"
+    if style not in {"grid", "adaptive"} and (style, N) not in LAYOUTS:
+        style = "adaptive" if N >= 5 else "grid"
 
     bg = make_bg(srcs[0], cfg)
     probe = ImageDraw.Draw(bg)
-    # Titular: admite 2 lineas separadas por \n (cada linea con su color).
-    top_parts = []
-    for part in a.top.split("\n"):
-        f, seg, w, h, size = fit_font(probe, part, cfg)
-        top_parts.append({"f": f, "seg": seg, "h": h, "size": size})
-    line_gap = cfg.get("line_gap", 10)
-    top_h = sum(p["h"] for p in top_parts) + line_gap * (len(top_parts) - 1)
-    top_size = top_parts[0]["size"] if top_parts else 0
-    # Contexto inferior: admite varias líneas y usa el mismo tamaño en todas.
-    bottom_parts = []
-    for part in a.bottom.split("\n"):
-        f, seg, w, h, size = fit_font(probe, part, cfg)
-        bottom_parts.append({"f": f, "seg": seg, "h": h, "size": size})
-    if bottom_parts:
-        common_size = min(p["size"] for p in bottom_parts)
-        for p in bottom_parts:
-            p["f"] = font_for(cfg.get("font", ""), common_size)
-            p["h"] = max(probe.textbbox((0, 0), t, font=p["f"], stroke_width=cfg.get("outline_width", 5))[3] for t, _ in p["seg"])
-        bot_size = common_size
-    else:
-        bot_size = 0
-    line_gap = cfg.get("line_gap", 10)
-    bot_h = sum(p["h"] for p in bottom_parts) + line_gap * (len(bottom_parts) - 1)
-
     gap = cfg.get("gap", 32)
     g = cfg.get("grid_gap", 24)
     pd = cfg.get("grid_padding", 30)
     outm = cfg.get("outer_margin", 90)
-    usable = H - 2 * outm - top_h - bot_h - 2 * gap
-    content_w = min(W - 2 * pd, cfg.get("foreground_max_width", 1000))
+    line_gap = int(cfg.get("line_gap", 10))
+    mini = int(cfg.get("min_font_size", 28))
+    content_w = max(1, min(W - 2 * pd, cfg.get("foreground_max_width", 1000)))
+
+    # Reserve the watermark's visible area. The content is centered in the
+    # remaining safe rectangle instead of being centered over the full canvas.
+    safe_top = int(outm)
+    wm_geometry = watermark_geometry(H, cfg)
+    safe_bottom = H - int(outm)
+    if wm_geometry:
+        safe_bottom = min(
+            safe_bottom,
+            int(wm_geometry["top"] - cfg.get("watermark_gap", 24)),
+        )
+    if safe_bottom <= safe_top:
+        ap.error("el área segura vertical no deja espacio para el contenido")
+
+    # Determine the smallest collage that the existing layout policy permits;
+    # text is reduced before the image is allowed to escape the safe area.
+    if N == 1:
+        base_cell_w = max(1, content_w)
+        base_cell_h = base_cell_w / ratio if ratio else base_cell_w
+        min_collage_h = base_cell_h * 0.2
+    elif style == "grid":
+        grid_cols, grid_rows = grid_dims(N, W / H)
+        natural_collage_h = content_w * grid_rows / grid_cols
+        grid_gap_h = (grid_rows - 1) * g
+        min_collage_h = grid_gap_h + max(1, (natural_collage_h - grid_gap_h) * 0.2)
+    elif style == "adaptive":
+        min_collage_h = max(1, g)
+    else:
+        min_collage_h = content_w * 0.2
+
+    try:
+        top_block = fit_block(probe, a.top, cfg)
+        bottom_block = fit_block(probe, a.bottom, cfg)
+    except ValueError as exc:
+        ap.error(str(exc))
+
+    top_size = top_block["size"]
+    bot_size = bottom_block["size"]
+    top_parts = top_block["parts"]
+    bottom_parts = bottom_block["parts"]
+    top_h = top_block["height"]
+    bot_h = bottom_block["height"]
+
+    for _ in range((top_size - mini) + (bot_size - mini) + 2):
+        top_block = block_at_size(probe, a.top, cfg, top_size)
+        bottom_block = block_at_size(probe, a.bottom, cfg, bot_size)
+        top_parts = top_block["parts"]
+        bottom_parts = bottom_block["parts"]
+        top_h = top_block["height"]
+        bot_h = bottom_block["height"]
+        usable = safe_bottom - safe_top - top_h - bot_h - 2 * gap
+        if usable >= min_collage_h:
+            break
+        if top_size <= mini and bot_size <= mini:
+            ap.error(
+                "el texto ocupa demasiado espacio vertical incluso con la fuente mínima; "
+                "divide el titular o el contexto en menos líneas"
+            )
+        if top_size >= bot_size and top_size > mini:
+            top_size -= 1
+        elif bot_size > mini:
+            bot_size -= 1
+
+    usable = safe_bottom - safe_top - top_h - bot_h - 2 * gap
     cells = []   # (x, y, w, h) en px absolutos del canvas
 
-    if style == "grid" or N == 1:
-        cols, rows = grid_dims(N, ratio, ) if N > 1 else (1, 1)
-        cell_w = (content_w - (cols - 1) * g) / cols
+    if N == 1:
+        cols, rows = 1, 1
+        cell_w = content_w
         cell_h = cell_w / ratio if ratio else cell_w
-        collage_h = rows * cell_h + (rows - 1) * g
-        if collage_h > usable:
-            usable2 = max(usable, (rows - 1) * g + 60)
-            scale = max(0.2, min(1.0, (usable2 - (rows - 1) * g) / (rows * cell_h)))
+        collage_h = cell_h
+        max_foreground_h = cfg.get("foreground_max_height", 0)
+        target_h = min(usable, max_foreground_h) if max_foreground_h else usable
+        if collage_h > target_h:
+            scale = max(0.2, min(1.0, target_h / cell_h))
             cell_w *= scale
             cell_h = cell_w / ratio if ratio else cell_w
-            collage_h = rows * cell_h + (rows - 1) * g
+            collage_h = cell_h
         cw = cols * cell_w + (cols - 1) * g
         cx0 = (W - cw) // 2
+        cells.append((cx0, 0, cell_w, cell_h))
+        fit = "contain" if a.fit == "auto" else a.fit
+    elif style == "grid":
+        cols, rows = grid_dims(N, W / H)
+        collage_w = content_w
+        natural_collage_h = collage_w * rows / cols
+        max_foreground_h = cfg.get("foreground_max_height", 0)
+        target_h = min(usable, max_foreground_h) if max_foreground_h else usable
+        grid_gap_h = (rows - 1) * g
+        target_h = max(grid_gap_h + 1, target_h)
+        collage_h = max(grid_gap_h + 1, min(natural_collage_h, target_h))
+        cell_w = (collage_w - (cols - 1) * g) / cols
+        cell_h = (collage_h - (rows - 1) * g) / rows
+        cx0 = (W - collage_w) / 2
         for i in range(N):
             r_i, c_i = divmod(i, cols)
             cells.append((cx0 + c_i * (cell_w + g),
-                          0 + r_i * (cell_h + g),
+                          r_i * (cell_h + g),
                           cell_w, cell_h))
-        fit = "contain" if N == 1 else ("contain" if style == "grid" else "cover")
+        fit = "cover" if a.fit == "auto" else a.fit
+    elif style == "adaptive":
+        stack_square_pair = (
+            N == 2
+            and H > W
+            and all(aspect_bucket(src.size)[0] == "square" for src in srcs)
+        )
+        max_foreground_h = cfg.get("foreground_max_height", 0)
+        # A stacked square pair has more unused horizontal space than a
+        # regular mixed collage, so let it grow by 10% while staying safe.
+        target_cap = max_foreground_h * 1.1 if stack_square_pair else max_foreground_h
+        target_h = min(usable, target_cap) if target_cap else usable
+        target_h = max(1, target_h)
+        cells, collage_h = adaptive_layout(
+            srcs,
+            W,
+            content_w,
+            target_h,
+            g,
+            stack_square_pair=stack_square_pair,
+        )
+        fit = "cover" if a.fit == "auto" else a.fit
     else:
         A_h, rects = LAYOUTS[(style, N)]
         collage_w = content_w
         collage_h = A_h * collage_w
         scale = 1.0
-        if collage_h > usable:
-            scale = max(0.2, min(1.0, usable / collage_h))
+        max_foreground_h = cfg.get("foreground_max_height", 0)
+        target_h = min(usable, max_foreground_h) if max_foreground_h else usable
+        if collage_h > target_h:
+            scale = max(0.2, min(1.0, target_h / collage_h))
         cw = collage_w * scale
         ch = collage_h * scale
         cx0 = (W - cw) / 2
         for (rx, ry, rw, rh) in rects:
             cells.append((cx0 + rx * cw, ry * ch, rw * cw, rh * ch))
         collage_h = ch
-        fit = "cover"
+        fit = "cover" if a.fit == "auto" else a.fit
 
     group = top_h + gap + collage_h + gap + bot_h
-    y0 = (H - group) // 2 + int(cfg.get("layout_shift_y", 0))
+    content_area_h = safe_bottom - safe_top
+    y0 = safe_top + (content_area_h - group) // 2 + int(cfg.get("layout_shift_y", 0))
     ty = y0
     cy = ty + top_h + gap
     by = cy + collage_h + gap
 
-    for (x, y, w, h), src in zip(cells, srcs):
-        place_image(bg, src, x + cy * 0 + 0, y + cy, w, h, cfg, fit=fit)
+    if ty < safe_top or by + bot_h > safe_bottom:
+        ap.error("el contenido excede los márgenes seguros; reduce o divide el texto")
 
-    tw = []
+    for (x, y, w, h), src in zip(cells, srcs):
+        place_image(bg, src, x, y + cy, w, h, cfg, fit=fit)
+
     yy = ty
-    for p in top_parts:
-        w2 = [probe.textbbox((0, 0), t, font=p["f"], stroke_width=cfg.get("outline_width", 5))[2] for t, _ in p["seg"]]
-        draw_segments(bg, p["seg"], p["f"], yy, cfg, w2)
-        yy += p["h"] + line_gap
+    for part in top_parts:
+        draw_segments(bg, part["seg"], part["f"], yy, cfg, part["widths"])
+        yy += part["h"] + line_gap
     yy = by
-    for p in bottom_parts:
-        w2 = [probe.textbbox((0, 0), t, font=p["f"], stroke_width=cfg.get("outline_width", 5))[2] for t, _ in p["seg"]]
-        draw_segments(bg, p["seg"], p["f"], yy, cfg, w2)
-        yy += p["h"] + line_gap
+    for part in bottom_parts:
+        draw_segments(bg, part["seg"], part["f"], yy, cfg, part["widths"])
+        yy += part["h"] + line_gap
     draw_watermark(bg, cfg)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.suffix.lower() == ".png":
+    suffix = out.suffix.lower()
+    if suffix == ".png":
         bg.convert("RGBA").save(out, format="PNG", compress_level=0)
+    elif suffix in {".jpg", ".jpeg"}:
+        bg.convert("RGB").save(out, format="JPEG", quality=95, optimize=True)
     else:
-        bg.convert("RGB").save(out, quality=95, optimize=True)
+        ap.error("la salida debe tener extension .png, .jpg o .jpeg")
     print(json.dumps({
         "output": str(out), "width": W, "height": H,
         "images": N, "ratio": round(ratio, 3), "style": style,
+        "orientations": [aspect_bucket(src.size)[0] for src in srcs],
         "top": {"y": ty, "font_size": top_size}, "bottom": {"y": by, "font_size": bot_size},
     }, ensure_ascii=False))
 

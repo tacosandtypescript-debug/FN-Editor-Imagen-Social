@@ -1,14 +1,33 @@
 """X11 CLIPBOARD owner que ofrece image/png (y texto) para pegar en Telegram."""
+import argparse
+from io import BytesIO
+import os
 import struct
-import sys
-import time
+from pathlib import Path
+from PIL import Image
 from Xlib import X, Xatom, display
+from Xlib.error import DisplayNameError
 
-PNG = open('/home/isaac/editimg_work/jobs/guille_card.png', 'rb').read()
+ROOT = Path(__file__).resolve().parents[1]
+ap = argparse.ArgumentParser()
+ap.add_argument(
+    'image', nargs='?', default=str(ROOT / 'jobs' / 'guille_card.png'),
+    help='PNG que se ofrecerá en el portapapeles',
+)
+a = ap.parse_args()
+with open(a.image, 'rb') as fh:
+    PNG = fh.read()
+with Image.open(a.image) as image:
+    jpeg_buffer = BytesIO()
+    image.convert('RGB').save(jpeg_buffer, format='JPEG', quality=95, optimize=True)
+    JPEG = jpeg_buffer.getvalue()
 
-d = display.Display(':0')
+try:
+    d = display.Display(os.environ.get('DISPLAY', ':0'))
+except DisplayNameError as exc:
+    raise SystemExit('no se pudo conectar al display X11; configura DISPLAY') from exc
 root = d.screen().root
-win = root.create_window(0, 0, 1, 1, 0, X.InputOutput, d.screen().root_depth)
+win = root.create_window(0, 0, 1, 1, 0, X.InputOutput, X.CopyFromParent)
 win.set_selection_owner(d.intern_atom('CLIPBOARD'), X.CurrentTime)
 
 A_TARGETS = d.intern_atom('TARGETS')
@@ -42,7 +61,9 @@ while True:
         atoms = [A_TARGETS, A_PNG, A_JPEG, A_STRING, A_UTF8, A_TEXT]
         data = struct.pack('=' + 'L' * len(atoms), *[int(a) for a in atoms])
         respond(req, Xatom.ATOM, 32, data)
-    elif req.target in (A_PNG, A_JPEG):
+    elif req.target == A_PNG:
         respond(req, req.target, 8, PNG)
+    elif req.target == A_JPEG:
+        respond(req, req.target, 8, JPEG)
     elif req.target in (A_UTF8, A_STRING, A_TEXT):
         respond(req, req.target, 8, b'')

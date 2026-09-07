@@ -1,7 +1,7 @@
 ---
 name: vertical-image-editor
 description: "Use when editing Fortnite news images into vertical cards."
-version: 2.0.0
+version: 2.1.0
 author: Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -13,7 +13,7 @@ metadata:
 # Vertical Image Editor — tarjetas verticales de noticias Fortnite
 
 Crea tarjetas verticales 1080x1920 (9:16) con fondo blur, imagen(es) sin
-deformar, sombra difusa de 2 capas y texto con palabras de color.
+deformar, sombra difusa diagonal y texto con palabras de color.
 
 ## Activacion
 
@@ -48,7 +48,9 @@ Estas reglas solo se aplican cuando una publicación incluya grupos de banderas 
   con el siguiente sin detener la cola.
 
 1. Obtener el tweet via `api.vxtwitter.com/USUARIO/status/ID` (o fxtwitter).
-2. Bajar las imagenes con `?name=orig` (o capturar frame si es video: ffmpeg).
+2. Extraer y bajar **todas** las imágenes en el orden original; para medios de
+   X pedir `?name=orig` (o capturar frame si es video: ffmpeg). No truncar un
+   carrusel a cuatro imágenes: el límite operativo por defecto es 24.
 3. Editar en espanol con titular inventado por el bot si Isaac no indica texto.
    NO esperar aprobacion cuando Isaac esta en modo "practica/entrenamiento":
    generar directo en estilo Directo (arriba hecho, abajo fecha/contexto).
@@ -58,20 +60,33 @@ Estas reglas solo se aplican cuando una publicación incluya grupos de banderas 
 ## Comando
 
 ```bash
-python3 scripts/compose_image.py img1.jpg [img2..img4] salida.jpg \
+python3 skills/media/vertical-image-editor/scripts/compose_image.py img1.jpg [img2..imgN] salida.png \
   --top 'TEXTO {CLAVE|FFD700}' --bottom 'CONTEXTO · 03/09' \
-  [--style auto|grid|bento|mosaico|puzzle|jerarquico|asimetrico] \
-  --preset references/presets/fortnite_vertical_image.json
+  [--format 9:16] [--fit auto|cover|contain] \
+  [--style auto|adaptive|grid|bento|mosaico|puzzle|jerarquico|asimetrico] \
+  --preset skills/media/vertical-image-editor/references/presets/fortnite_vertical_image.json
 ```
 
-El ULTIMO argumento es la salida. 1 imagen = tarjeta simple; 2-4 = collage.
+El ULTIMO argumento es la salida. 1 imagen = tarjeta simple; 2 o más = collage.
+La ruta de `scripts/compose_image.py` es una entrada compatible; la lógica vive
+en `bin/compose_image.py` para evitar que ambas implementaciones diverjan.
+
+Para trabajar directamente desde un enlace de X/Twitter y tomar todas las
+imágenes del post en su orden original:
+
+```bash
+python3 bin/edit_link.py 'https://x.com/USUARIO/status/ID' salida.png \
+  --top 'TITULAR' --bottom 'CONTEXTO · 03/09' \
+  --format 9:16 --preset skills/media/vertical-image-editor/references/presets/fortnite_vertical_image.json
+```
 
 ## Reglas de estilo (aprobadas por Isaac)
 
 - **Margenes seguros SIEMPRE**: 90 px arriba/abajo y 60 px a cada lado
   (texto e imagenes dentro de la zona segura; nada pegado a bordes).
-- **Sombra de imagen**: UNA sola sombra exterior amplia, visible y difusa (blur
-  86, opacidad 68), con máscara expandida antes del blur para que no quede
+- **Sombra de imagen**: UNA sola sombra exterior corta y ligera, desplazada
+  ligeramente a la izquierda y abajo en diagonal (blur 28, desplazamiento
+  -8x12, opacidad 48), con máscara expandida antes del blur para que no quede
   cuadrada.
 - **Marca de agua**: añadir siempre `CÓDIGO: KHETZALGG` centrado en la zona
   inferior, separado del borde (145 px desde abajo), en blanco semitransparente
@@ -83,7 +98,10 @@ El ULTIMO argumento es la salida. 1 imagen = tarjeta simple; 2-4 = collage.
   (outline) 6 px. Si un titular no cabe en una línea con letra grande, partirlo
   en 2 líneas separadas por `\n` en `--top` (cada línea conserva su color y se
   centra).
-- **Colores sin repetir**: dentro de una misma tarjeta, no repetir un color en dos palabras. Distribuir los colores de la paleta Halloween entre las palabras destacadas; si arriba se usan morado y naranja, abajo usar magenta y dorado.
+- **Color de texto**: mantener el texto mayormente blanco y usar como máximo dos
+  colores de acento por tarjeta: normalmente una palabra arriba y otra abajo.
+  Elegir los acentos por contraste con el fondo; no juntar los cuatro colores
+  de la paleta en una misma tarjeta salvo que Isaac lo pida explícitamente.
 - **Alineación**: centrar horizontalmente cada línea de texto, tanto el titular como el contexto inferior; nunca dejar líneas corridas hacia la izquierda.
 - Texto auto-encogido para caber siempre (nunca se corta).
 - Fondo: cover blur de la primera imagen, nunca estirar. Sujeto contain.
@@ -103,34 +121,37 @@ necesarios para entender la noticia.
 - Si Isaac pide únicamente título y hashtags, entregar solo esas dos cosas; no
   añadir explicación ni caption largo.
 
-## Collage 2-4 imagenes: estilos de acomodo
+## Collage 2+ imagenes: estilos de acomodo
 
 Estilos disponibles (seleccion **automatica por defecto** segun numero de
 imagenes y proporcion; Isaac puede forzar con `--style`):
 
-- **auto** (defecto): elige el mejor segun N y la proporcion de la 1ª imagen
-  (N<=2 -> grid; N=3 -> jerarquico si son anchas, asimetrico si verticales,
-  mosaico si cuadradas; N=4 -> jerarquico si anchas, asimetrico si verticales,
-  bento si cuadradas/cercanas).
-- **grid**: cuadricula uniforme (legacy, contain).
+- **auto** (defecto): cualquier collage de 2 o más imágenes usa `adaptive`,
+  incluso cuando todas comparten orientación. Así una horizontal nunca cae en
+  una celda vertical por culpa de un layout editorial antiguo.
+- **adaptive**: clasifica cada imagen de forma independiente y conserva el
+  orden. Ratio ≥1.25 → horizontal 16:9; 0.8–1.25 → cuadrada 1:1; ratio ≤0.8
+  → vertical 9:16. Las filas se justifican dentro del área segura para que
+  cada celda mantenga su forma sin deformación. Si hay dos imágenes cuadradas
+  en un lienzo vertical, las apila una arriba de otra; en lienzos cuadrados o
+  apaisados las coloca en fila.
+- **grid**: cuadricula uniforme, útil cuando se quiere que todas las celdas
+  tengan exactamente la misma forma.
 - **bento**: bloques cuadrados/rectangulares de distintos tamanos, ordenado y
   moderno, con hueco de diseno.
-- **mosaico**: celdas que encajan sin espacios; filas de distinta altura.
-- **puzzle**: piezas rectangulares desiguales que encajan sin huecos.
+- **mosaico**: celdas compactas con separación visual; filas de distinta altura.
+- **puzzle**: piezas rectangulares desiguales con separación visual.
 - **jerarquico**: una imagen grande protagonista (arriba) + secundarias.
 - **asimetrico**: una imagen grande a la izquierda + secundarias a la derecha.
 
-Reglas de los estilos nuevos: rellenan su celda con **cover centrado** (nunca
-deforman; recortan solo los bordes sobrantes). La tarjeta simple (1 imagen) y
-`--style grid` conservan **contain** (imagen completa, sin recorte).
+Reglas de recorte: los collages usan **cover centrado** por defecto (nunca
+deforman; recortan solo los bordes sobrantes). La tarjeta simple usa
+**contain** por defecto. Se puede elegir explícitamente `--fit cover` o
+`--fit contain`; este último conserva la imagen completa dentro de su celda.
 
-Disposicion automatica LEGACY (solo `grid`) segun r = ancho/alto y N:
-
-- r >= 1.2 (anchas/panoramicas): COLUMNA apiladas.
-- r <= 0.8 (verticales): FILA en linea horizontal.
-- 0.8 < r < 1.2 (cuadradas/cercanas): N=2 columna, N=3 fila, N=4 rejilla 2x2.
-- Si las imagenes NO son del mismo tamano, avisar y preguntar; por defecto
-  celdas uniformes.
+Si las imágenes tienen tamaños distintos, se avisa pero no se detiene el
+proceso: la clasificación usa el ancho/alto real de cada archivo y el motor
+las acomoda de manera independiente.
 
 ## Video en el tweet
 
@@ -139,5 +160,8 @@ usarlo como imagen.
 
 ## Archivos
 
-- `scripts/compose_image.py`: composicion (Pillow), 1-4 entradas.
+- `scripts/compose_image.py`: entrada compatible al compositor canónico de
+  `bin/compose_image.py`, 1 o más entradas.
+- `bin/fetch_media.py` y `bin/edit_link.py`: descarga ordenada de medios y
+  composición desde un enlace.
 - `references/presets/fortnite_vertical_image.json`: valores visuales.

@@ -1,6 +1,11 @@
+import argparse
 from PIL import Image
 from collections import Counter
-im = Image.open('/home/isaac/.hermes/profiles/editimg/cache/images/computer_use_6a6ab12f3d5042b0b363f3c7f786605d.png').convert('RGB')
+
+ap = argparse.ArgumentParser(description='Analiza el color dominante de una imagen.')
+ap.add_argument('image', help='ruta de la imagen a analizar')
+a = ap.parse_args()
+im = Image.open(a.image).convert('RGB')
 W, H = im.size
 px = im.load()
 cnt = Counter()

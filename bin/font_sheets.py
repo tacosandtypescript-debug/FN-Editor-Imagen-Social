@@ -1,8 +1,9 @@
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-FONTDIR = Path('/home/isaac/.local/share/fonts')
-OUTDIR = Path('/home/isaac/editimg_work/jobs')
+ROOT = Path(__file__).resolve().parents[1]
+FONTDIR = ROOT / 'barlow_font'
+OUTDIR = ROOT / 'jobs'
 W, H = 1080, 1920
 BG = (27, 32, 42)
 WHITE = (255, 255, 255)

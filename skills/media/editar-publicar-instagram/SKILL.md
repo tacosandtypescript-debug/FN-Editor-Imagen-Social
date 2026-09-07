@@ -27,9 +27,12 @@ archivo se entrega **encolándolo en igpub**. El worker del publicador lo sube
 solo a IG en orden FIFO.
 
 ```
-imagen editada (esta máquina)  ->  python3 ~/igpub/enqueue.py post|story <imagen> [--caption]
+imagen editada (esta máquina)  ->  python3 "$IGPUB_DIR/enqueue.py" post|story <imagen> [--caption]
                                      ->  queue/in  ->  queue_worker.py  ->  Instagram @khetzalgg
 ```
+
+Define `IGPUB_DIR` con la ruta local del proyecto externo `igpub` antes de usar
+este flujo; no se asume una ruta fija de usuario.
 
 ## Pasos
 
@@ -43,7 +46,7 @@ imagen editada (esta máquina)  ->  python3 ~/igpub/enqueue.py post|story <image
    - historia → `story` (imagen 9:16; **sin caption**)
 3. **Encolar** (nunca publicar en primer plano con `ig_publish.py`):
    ```bash
-   python3 /home/isaac/igpub/enqueue.py <post|story> <imagen.png> [--caption "texto"]
+   python3 "$IGPUB_DIR/enqueue.py" <post|story> <imagen.png> [--caption "texto"]
    ```
 4. Responder breve: `✅ en cola — sube solo` (con tipo).
 
@@ -51,16 +54,16 @@ imagen editada (esta máquina)  ->  python3 ~/igpub/enqueue.py post|story <image
 
 ```bash
 # worker vivo (pid del proceso publicador)
-ps -p $(cat /home/isaac/igpub/queue/worker.pid)
+ps -p $(cat "$IGPUB_DIR/queue/worker.pid")
 
 # estado de publicaciones
-tail /home/isaac/igpub/queue/worker.log      # OK <id> media_id=...
-ls /home/isaac/igpub/queue/done              # exitosos
-ls /home/isaac/igpub/queue/failed            # fallidos (avisar a Isaac cuál reenviar)
+tail "$IGPUB_DIR/queue/worker.log"      # OK <id> media_id=...
+ls "$IGPUB_DIR/queue/done"              # exitosos
+ls "$IGPUB_DIR/queue/failed"            # fallidos (avisar a Isaac cuál reenviar)
 ```
 
 Si el worker está muerto (sin pid / sin proceso), relanzarlo en background:
-`cd /home/isaac/igpub && python3 queue_worker.py` (proceso continuo, no
+`cd "$IGPUB_DIR" && python3 queue_worker.py` (proceso continuo, no
 bloqueante). Tras reiniciar el gateway de storybot el worker puede caerse:
 comprobar siempre antes de encolar.
 
