@@ -321,7 +321,7 @@ def _draw_watermark_side(im, cfg, layer, text, font, opacity, side):
     rot = rot.crop(bbox)
     safe_x = cfg.get("text_margin", 60)
     horizontal = rot.width
-    inset = 20  # px dentro del límite de la zona segura (avance hacia la imagen)
+    inset = 40  # px dentro del límite de la zona segura (avance hacia la imagen)
     if side == "left":
         px = safe_x - inset - horizontal
     else:
