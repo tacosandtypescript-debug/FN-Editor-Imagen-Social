@@ -321,11 +321,11 @@ def _draw_watermark_side(im, cfg, layer, text, font, opacity, side):
     rot = rot.crop(bbox)
     safe_x = cfg.get("text_margin", 60)
     horizontal = rot.width
-    mid = safe_x / 2.0  # punto medio entre zona segura y borde (30 px)
+    inset = 8  # px dentro del límite de la zona segura (avance visible hacia la imagen)
     if side == "left":
-        px = int(round(mid - horizontal / 2.0))
+        px = safe_x - inset - horizontal
     else:
-        px = int(round((im.width - mid) - horizontal / 2.0))
+        px = (im.width - safe_x) - inset - horizontal
     px = max(2, min(px, im.width - horizontal - 2))
     py = (im.height - rot.height) // 2
     layer.alpha_composite(rot, (px, py))
