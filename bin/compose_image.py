@@ -308,8 +308,9 @@ def _side_for_watermark(im):
     return "left" if s_l <= s_r else "right"
 
 def _draw_watermark_side(im, cfg, layer, text, font, opacity, side):
-    """Marca lateral: texto completo rotado 90°, dentro de la franja lateral
-    (0..60 o W-60..W), con un pequeño margen visual respecto a la zona segura."""
+    """Marca lateral: texto completo rotado 90°, centrado en el punto medio
+    entre la zona segura y el borde del lienzo, dentro del lienzo y sin
+    cortarse."""
     tlayer = Image.new("RGBA", (im.width, im.height), (0, 0, 0, 0))
     td = ImageDraw.Draw(tlayer)
     box = td.textbbox((0, 0), text, font=font)
@@ -318,13 +319,14 @@ def _draw_watermark_side(im, cfg, layer, text, font, opacity, side):
     rot = tlayer.rotate(90, expand=True, resample=Image.Resampling.BICUBIC)
     bbox = rot.getbbox()
     rot = rot.crop(bbox)
-    gap = max(8, min(20, int(cfg.get("watermark", {}).get("side_gap", 12))))
     safe_x = cfg.get("text_margin", 60)
     horizontal = rot.width
+    mid = safe_x / 2.0  # punto medio entre zona segura y borde (30 px)
     if side == "left":
-        px = max(2, safe_x - gap - horizontal)
+        px = int(round(mid - horizontal / 2.0))
     else:
-        px = im.width - max(2, safe_x - gap - horizontal) - horizontal
+        px = int(round((im.width - mid) - horizontal / 2.0))
+    px = max(2, min(px, im.width - horizontal - 2))
     py = (im.height - rot.height) // 2
     layer.alpha_composite(rot, (px, py))
 

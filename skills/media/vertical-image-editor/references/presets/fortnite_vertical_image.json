@@ -20,7 +20,8 @@
     "size": 46,
     "opacity": 125,
     "bottom_margin": 145,
-    "side_mode": "auto"
+    "side_mode": "auto",
+    "side_gap": 8
   },
   "text_shadow": {
     "blur": 14,

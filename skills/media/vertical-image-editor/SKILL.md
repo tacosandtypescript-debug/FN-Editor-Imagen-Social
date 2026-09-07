@@ -96,7 +96,8 @@ python3 bin/edit_link.py 'https://x.com/USUARIO/status/ID' salida.png \
   en uno de los laterales según dónde interfiera menos con el diseño. Reglas:
   - Fuera de la zona segura, en el espacio lateral entre la zona segura y el
     borde del lienzo (franja 0..60 o 1020..1080).
-  - A unos pocos píxeles de la zona segura (8-20 px), no totalmente pegado.
+  - Centrada en el punto medio entre la zona segura y el borde del lienzo
+    (x=30 en el lateral izquierdo, x=1050 en el derecho).
   - Siempre dentro del lienzo 1080x1920: nunca cortado ni fuera de la imagen.
   - Puede rotarse la palabra completa 90° para acomodarla verticalmente; NO
     rotar letras individualmente; NO poner letras una debajo de otra; mantener
