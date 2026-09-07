@@ -1,5 +1,8 @@
 {
-  "canvas": {"width": 1080, "height": 1920},
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
   "gap": 32,
   "font": "barlow_font/Barlow-BlackItalic.ttf",
   "font_size": 72,
@@ -16,16 +19,23 @@
     "text": "CÓDIGO: KHETZALGG",
     "size": 46,
     "opacity": 125,
-    "bottom_margin": 145
+    "bottom_margin": 145,
+    "side_mode": "auto"
   },
   "text_shadow": {
     "blur": 14,
-    "offset": [3, 5],
+    "offset": [
+      3,
+      5
+    ],
     "opacity": 72
   },
   "shadow": {
     "blur": 28,
-    "offset": [-8, 12],
+    "offset": [
+      -8,
+      12
+    ],
     "opacity": 48
   },
   "background_blur": 16,

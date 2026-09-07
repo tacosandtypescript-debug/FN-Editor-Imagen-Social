@@ -28,7 +28,7 @@ justos). Usa --fit contain para conservar la imagen completa en cada celda.
 """
 import argparse, json, math, re, sys
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageStat
 
 SEG = re.compile(r"\{([^{}|]+)\|([0-9A-Fa-f]{6})\}")
 
@@ -297,22 +297,66 @@ def rounded(img, radius):
     img.putalpha(mask)
     return img, mask
 
-def draw_watermark(im, cfg):
-    """Marca de agua del creador: CÓDIGO: KHETZALGG, centrado abajo."""
+def _side_for_watermark(im):
+    """Elige el lateral con menos contenido (menor contraste en la franja)."""
+    g = im.convert("L")
+    strip = 60
+    left = g.crop((0, 0, strip, im.height))
+    right = g.crop((im.width - strip, 0, im.width, im.height))
+    s_l = ImageStat.Stat(left).stddev[0]
+    s_r = ImageStat.Stat(right).stddev[0]
+    return "left" if s_l <= s_r else "right"
+
+def _draw_watermark_side(im, cfg, layer, text, font, opacity, side):
+    """Marca lateral: texto completo rotado 90°, dentro de la franja lateral
+    (0..60 o W-60..W), con un pequeño margen visual respecto a la zona segura."""
+    tlayer = Image.new("RGBA", (im.width, im.height), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tlayer)
+    box = td.textbbox((0, 0), text, font=font)
+    td.text((0 - box[0], 0 - box[1]), text, font=font, fill=(255, 255, 255, opacity),
+            stroke_width=1, stroke_fill=(0, 0, 0, max(0, opacity // 2)))
+    rot = tlayer.rotate(90, expand=True, resample=Image.Resampling.BICUBIC)
+    bbox = rot.getbbox()
+    rot = rot.crop(bbox)
+    gap = max(8, min(20, int(cfg.get("watermark", {}).get("side_gap", 12))))
+    safe_x = cfg.get("text_margin", 60)
+    horizontal = rot.width
+    if side == "left":
+        px = max(2, safe_x - gap - horizontal)
+    else:
+        px = im.width - max(2, safe_x - gap - horizontal) - horizontal
+    py = (im.height - rot.height) // 2
+    layer.alpha_composite(rot, (px, py))
+
+def draw_watermark(im, cfg, n_images=1):
+    """Marca de agua del creador: CÓDIGO: KHETZALGG.
+
+    - 1 imagen / tarjeta simple: centrada abajo (comportamiento historico).
+    - Collage (2+ imagenes) o 'side_mode=auto': colocada en el lateral con
+      menos contenido, rotada 90° como una sola pieza, dentro del lienzo,
+      fuera de la zona segura y sin cortarse.
+    """
     wm = cfg.get("watermark", {})
     text = wm.get("text", "")
     if not text:
         return
     font = font_for(wm.get("font", cfg.get("font", "")), int(wm.get("size", 46)))
     opacity = int(wm.get("opacity", 125))
-    margin = int(wm.get("bottom_margin", cfg.get("outer_margin", 90) + 55))
     layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    box = d.textbbox((0, 0), text, font=font)
-    x = (im.width - (box[2] - box[0])) // 2 - box[0]
-    y = im.height - margin - box[3]
-    d.text((x, y), text, font=font, fill=(255, 255, 255, opacity),
-           stroke_width=1, stroke_fill=(0, 0, 0, max(0, opacity // 2)))
+    side_mode = wm.get("side_mode", "auto")
+    if side_mode == "auto" and n_images >= 2:
+        side = wm.get("side", "auto")
+        if side not in ("left", "right"):
+            side = _side_for_watermark(im)
+        _draw_watermark_side(im, cfg, layer, text, font, opacity, side)
+    else:
+        margin = int(wm.get("bottom_margin", cfg.get("outer_margin", 90) + 55))
+        d = ImageDraw.Draw(layer)
+        box = d.textbbox((0, 0), text, font=font)
+        x = (im.width - (box[2] - box[0])) // 2 - box[0]
+        y = im.height - margin - box[3]
+        d.text((x, y), text, font=font, fill=(255, 255, 255, opacity),
+               stroke_width=1, stroke_fill=(0, 0, 0, max(0, opacity // 2)))
     im.alpha_composite(layer)
 
 
@@ -634,7 +678,7 @@ def main():
     for part in bottom_parts:
         draw_segments(bg, part["seg"], part["f"], yy, cfg, part["widths"])
         yy += part["h"] + line_gap
-    draw_watermark(bg, cfg)
+    draw_watermark(bg, cfg, N)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
