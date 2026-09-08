@@ -471,6 +471,8 @@ def main():
     ap.add_argument("--top", required=True)
     ap.add_argument("--bottom", required=True)
     ap.add_argument("--preset", default=None)
+    ap.add_argument("--background", default=None,
+                    help="imagen externa para el fondo desenfocado")
     ap.add_argument("--style", default="auto",
                     choices=("auto",) + STYLES,
                     help="estilo de collage (defecto: auto segun N y proporcion)")
@@ -512,7 +514,8 @@ def main():
     if style not in {"grid", "adaptive"} and (style, N) not in LAYOUTS:
         style = "adaptive" if N >= 5 else "grid"
 
-    bg = make_bg(srcs[0], cfg)
+    bg_src = Image.open(a.background).convert("RGB") if a.background else srcs[0]
+    bg = make_bg(bg_src, cfg)
     probe = ImageDraw.Draw(bg)
     gap = cfg.get("gap", 32)
     g = cfg.get("grid_gap", 24)
