@@ -346,7 +346,7 @@ def draw_watermark(im, cfg, n_images=1):
     opacity = int(wm.get("opacity", 125))
     layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
     side_mode = wm.get("side_mode", "auto")
-    if side_mode == "auto" and n_images >= 2:
+    if side_mode in ("side", "lateral") or (side_mode == "auto" and n_images >= 2):
         side = wm.get("side", "auto")
         if side not in ("left", "right"):
             side = _side_for_watermark(im)

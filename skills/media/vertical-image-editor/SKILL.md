@@ -91,9 +91,10 @@ python3 bin/edit_link.py 'https://x.com/USUARIO/status/ID' salida.png \
 - **Marca de agua**: añadir siempre `CÓDIGO: KHETZALGG` centrado en la zona
   inferior, separado del borde (145 px desde abajo), en blanco semitransparente
   (opacidad 125, tamaño 46). No pegarlo al límite ni ponerlo sobre el titular.
-- **Marca de agua en collages (2+ imagenes)**: cuando haya dos imágenes o los
-  elementos principales ocupen demasiado espacio, colocar `CÓDIGO: KHETZALGG`
-  en uno de los laterales según dónde interfiera menos con el diseño. Reglas:
+- **Marca de agua en collages (2+ imagenes) o composiciones altas**: cuando
+  haya dos imágenes o los elementos principales ocupen demasiado espacio,
+  colocar `CÓDIGO: KHETZALGG` en uno de los laterales según dónde interfiera
+  menos con el diseño. Reglas:
   - Fuera de la zona segura, en el espacio lateral entre la zona segura y el
     borde del lienzo (franja 0..60 o 1020..1080).
   - Avanzada hacia la imagen: borde interior a unos 20 px dentro del límite de
