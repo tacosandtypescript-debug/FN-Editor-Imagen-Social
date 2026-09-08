@@ -1,6 +1,7 @@
-# EditImg — Editor de tarjetas verticales de Fortnite
+# EditImg — Editor de tarjetas de Fortnite
 
-Proyecto completo para crear tarjetas 1080×1920 a partir de imágenes o publicaciones de X.
+Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
+1080×1080 a partir de imágenes o publicaciones de X.
 
 ## Incluye
 
@@ -9,6 +10,7 @@ Proyecto completo para crear tarjetas 1080×1920 a partir de imágenes o publica
 - `bin/edit_link.py`: une descarga + composición en un solo comando.
 - `skills/media/vertical-image-editor/scripts/compose_image.py`: entrada
   compatible con la skill que delega en el compositor principal.
+- `skills/media/square-image-editor/`: skill, wrapper y preset para tarjetas 1:1.
 - Presets JSON con tipografía, paleta, sombras, márgenes y marca de creador.
 - Scripts auxiliares de composición y renderizado de tablas/banderas.
 - Skills y reglas de edición en `skills/`.
@@ -75,6 +77,19 @@ python3 bin/edit_link.py 'https://x.com/usuario/status/123456789' salida.png \
 El flujo admite además una URL directa de imagen. Por seguridad, limita cada
 descarga a 25 MB y el lote a 24 imágenes salvo que se cambie `--max-images`.
 
+Para usar el mismo flujo en una tarjeta cuadrada, usa el preset 1:1:
+
+```bash
+python3 skills/media/square-image-editor/scripts/compose_image.py \
+  img1.jpg img2.jpg salida.png \
+  --top 'TITULAR {CLAVE|8B3DFF}' \
+  --bottom 'CONTEXTO · 03/09' \
+  --preset skills/media/square-image-editor/references/presets/fortnite_square_image.json
+```
+
+Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
+`bin/edit_link.py`.
+
 La fuente Barlow se resuelve desde `barlow_font/` y el preset funciona aunque el
 comando se ejecute desde otro directorio.
 
@@ -86,7 +101,7 @@ python3 -m unittest discover -s tests -v
 
 ## Reglas visuales
 
-- Lienzo vertical 1080×1920.
+- Lienzo vertical 1080×1920 o cuadrado 1080×1080 según el preset.
 - Márgenes seguros y texto centrado.
 - Barlow Black Italic.
 - Paleta Halloween: morado, naranja, magenta y dorado.

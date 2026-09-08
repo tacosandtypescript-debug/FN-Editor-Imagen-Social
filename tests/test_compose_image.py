@@ -18,7 +18,9 @@ from fetch_media import extract_media_urls, parse_x_status_url
 
 COMPOSER = ROOT / "bin" / "compose_image.py"
 SKILL_COMPOSER = ROOT / "skills" / "media" / "vertical-image-editor" / "scripts" / "compose_image.py"
+SQUARE_SKILL_COMPOSER = ROOT / "skills" / "media" / "square-image-editor" / "scripts" / "compose_image.py"
 PRESET = ROOT / "bin" / "preset.json"
+SQUARE_PRESET = ROOT / "skills" / "media" / "square-image-editor" / "references" / "presets" / "fortnite_square_image.json"
 COMPOSER_SPEC = importlib.util.spec_from_file_location("compose_image_under_test", COMPOSER)
 COMPOSER_MODULE = importlib.util.module_from_spec(COMPOSER_SPEC)
 COMPOSER_SPEC.loader.exec_module(COMPOSER_MODULE)
@@ -71,6 +73,52 @@ class ComposeImageTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(main_output.read_bytes()).digest(), hashlib.sha256(skill_output.read_bytes()).digest())
         with Image.open(main_output) as image:
             self.assertEqual((image.width, image.height, image.format), (1080, 1920, "PNG"))
+            self.assertEqual(image.mode, "RGBA")
+
+    def test_square_skill_wrapper_matches_canonical_compositor(self):
+        square_inputs = []
+        for index in range(2):
+            path = self.work / f"square-{index}.png"
+            Image.new("RGB", (1000 + index * 100, 1000 + index * 100), (80, 40 + index * 50, 160)).save(path)
+            square_inputs.append(path)
+
+        def run(script, output):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    *(str(path) for path in square_inputs),
+                    str(output),
+                    "--top",
+                    "TARJETA {CUADRADA|8B3DFF}",
+                    "--bottom",
+                    "PRUEBA 1:1",
+                    "--preset",
+                    str(SQUARE_PRESET),
+                ],
+                cwd=self.work,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout.strip().splitlines()[-1])
+
+        canonical_output = self.work / "square-canonical.png"
+        skill_output = self.work / "square-skill.png"
+        canonical_meta = run(COMPOSER, canonical_output)
+        skill_meta = run(SQUARE_SKILL_COMPOSER, skill_output)
+
+        self.assertEqual(canonical_meta["width"], 1080)
+        self.assertEqual(canonical_meta["height"], 1080)
+        self.assertEqual(canonical_meta["style"], "adaptive")
+        self.assertEqual(canonical_meta["orientations"], ["square", "square"])
+        self.assertEqual(canonical_meta["style"], skill_meta["style"])
+        self.assertEqual(
+            hashlib.sha256(canonical_output.read_bytes()).digest(),
+            hashlib.sha256(skill_output.read_bytes()).digest(),
+        )
+        with Image.open(skill_output) as image:
+            self.assertEqual((image.width, image.height, image.format), (1080, 1080, "PNG"))
             self.assertEqual(image.mode, "RGBA")
 
     def test_multiline_text_is_shrunk_into_safe_area(self):

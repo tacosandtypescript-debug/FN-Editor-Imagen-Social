@@ -12,8 +12,8 @@ metadata:
 
 # Publicar en Instagram — flujo de imágenes (perfil @Editimagenbot)
 
-Este perfil edita **solo imágenes** (tarjetas verticales 1080×1920 de noticias
-Fortnite) y entrega el PNG/JPG final al publicador de IG (@StoryinstaTiktokbot,
+Este perfil edita **solo imágenes** (tarjetas verticales 1080×1920 y cuadradas
+1080×1080 de noticias Fortnite) y entrega el PNG/JPG final al publicador de IG (@StoryinstaTiktokbot,
 cuenta @khetzalgg) **sin mensajería Telegram bot-a-bot**: todos los procesos
 viven en la misma máquina y la **cola igpub** es el canal de entrega. Los
 vídeos NO se editan aquí: eso lo hace @hermeserositobot.
@@ -36,14 +36,15 @@ este flujo; no se asume una ruta fija de usuario.
 
 ## Pasos
 
-1. **Editar la imagen** con la skill `vertical-image-editor`
-   (`compose_image.py` con preset `fortnite_vertical_image`, reglas de estilo
-   aprobadas: márgenes seguros, sombra, marca de agua KHETZALGG, titular
-   arriba + contexto/fecha abajo). Entregar el resultado con MEDIA antes de
-   preguntar por publicación.
+1. **Editar la imagen** con `vertical-image-editor` para 9:16 o
+   `square-image-editor` para 1:1 (`compose_image.py` con el preset
+   correspondiente; reglas de estilo aprobadas: márgenes seguros, sombra,
+   marca de agua KHETZALGG, titular arriba + contexto/fecha abajo). Entregar
+   el resultado con MEDIA antes de preguntar por publicación.
 2. **Decidir el tipo IG** según lo que pida Isaac:
    - publicación en el feed / carrusel → `post` (imagen; con caption)
    - historia → `story` (imagen 9:16; **sin caption**)
+   - publicación cuadrada de feed → `post` (imagen 1:1; con caption)
 3. **Encolar** (nunca publicar en primer plano con `ig_publish.py`):
    ```bash
    python3 "$IGPUB_DIR/enqueue.py" <post|story> <imagen.png> [--caption "texto"]
@@ -79,8 +80,9 @@ comprobar siempre antes de encolar.
 
 ## Particularidades de este perfil
 
-- Isaac edita aquí imágenes de noticias (`vertical-image-editor` para la
-  composición; una tarjeta por tweet, o carrusel si son varias).
+- Isaac edita aquí imágenes de noticias (`vertical-image-editor` para 9:16 o
+  `square-image-editor` para 1:1; una tarjeta por tweet, o carrusel si son
+  varias).
 - Si Isaac adjunta un VÍDEO pidiendo editar/publicar, indicarle que eso lo
   hace @hermeserositobot (este perfil es solo imágenes). Si el tweet trae
   vídeo pero Isaac quiere tarjeta, sacar un frame y editar la imagen.
