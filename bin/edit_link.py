@@ -7,12 +7,41 @@ import sys
 import tempfile
 from pathlib import Path
 
+from compose_image import STYLES, positive_int
 from fetch_media import download_link
+from runtime_config import DEFAULT_MAX_IMAGES
 
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSER = ROOT / "bin" / "compose_image.py"
 DEFAULT_PRESET = ROOT / "bin" / "preset.json"
+
+
+def build_composer_command(args, input_paths):
+    """Build the canonical compositor command from the link CLI options."""
+    command = [
+        sys.executable,
+        str(COMPOSER),
+        *input_paths,
+        str(args.output),
+        "--top",
+        args.top,
+        "--bottom",
+        args.bottom,
+        "--preset",
+        str(args.preset),
+        "--style",
+        args.style,
+        "--fit",
+        args.fit,
+        "--max-images",
+        str(args.max_images),
+    ]
+    if args.output_format:
+        command.extend(["--format", args.output_format])
+    if args.background:
+        command.extend(["--background", str(args.background)])
+    return command
 
 
 def main():
@@ -24,10 +53,20 @@ def main():
     parser.add_argument("--top", required=True)
     parser.add_argument("--bottom", required=True)
     parser.add_argument("--preset", type=Path, default=DEFAULT_PRESET)
-    parser.add_argument("--style", default="auto")
+    parser.add_argument(
+        "--background", type=Path, default=None,
+        help="imagen externa para el fondo desenfocado",
+    )
+    parser.add_argument(
+        "--style", default="auto", choices=("auto",) + STYLES,
+        help="estilo de collage (defecto: auto)",
+    )
     parser.add_argument("--format", dest="output_format", default=None)
     parser.add_argument("--fit", choices=("auto", "cover", "contain"), default="auto")
-    parser.add_argument("--max-images", type=int, default=24)
+    parser.add_argument(
+        "--max-images", type=positive_int, default=DEFAULT_MAX_IMAGES,
+        help=f"maximo de imagenes descargadas (defecto: {DEFAULT_MAX_IMAGES})",
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="editimg-media-") as temporary:
@@ -36,24 +75,7 @@ def main():
         except Exception as exc:
             parser.error(str(exc))
         input_paths = [item["path"] for item in media]
-        command = [
-            sys.executable,
-            str(COMPOSER),
-            *input_paths,
-            str(args.output),
-            "--top",
-            args.top,
-            "--bottom",
-            args.bottom,
-            "--preset",
-            str(args.preset),
-            "--style",
-            args.style,
-            "--fit",
-            args.fit,
-        ]
-        if args.output_format:
-            command.extend(["--format", args.output_format])
+        command = build_composer_command(args, input_paths)
         completed = subprocess.run(command, check=False)
         raise SystemExit(completed.returncode)
 

@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import runpy
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -11,4 +12,5 @@ CANONICAL = ROOT / "bin" / "compose_image.py"
 if not CANONICAL.is_file():
     raise SystemExit(f"no se encontró el compositor canónico: {CANONICAL}")
 
+sys.path.insert(0, str(CANONICAL.parent))
 runpy.run_path(str(CANONICAL), run_name="__main__")

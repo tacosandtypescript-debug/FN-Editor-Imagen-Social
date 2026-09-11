@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from PIL import Image
+from runtime_config import DEFAULT_MAX_IMAGES, MAX_SOURCE_PIXELS
 
 
 USER_AGENT = "EditImg/1.0 (+https://github.com/tacosandtypescript-debug/editimg-fortnite-editor)"
@@ -150,10 +151,19 @@ def is_probably_direct_image(url):
 def inspect_image(raw):
     try:
         with Image.open(BytesIO(raw)) as image:
-            image.load()
+            image.verify()
+        # verify() invalidates the image object, so reopen the bytes to inspect
+        # dimensions and force decoding before the file is written to disk.
+        with Image.open(BytesIO(raw)) as image:
             image_format = image.format
             size = image.size
-            image.verify()
+            if size[0] <= 0 or size[1] <= 0:
+                raise ValueError("sus dimensiones deben ser positivas")
+            if size[0] * size[1] > MAX_SOURCE_PIXELS:
+                raise ValueError(
+                    f"supera el maximo de {MAX_SOURCE_PIXELS:,} pixeles"
+                )
+            image.load()
     except Exception as exc:
         raise ValueError(f"el recurso descargado no es una imagen válida: {exc}") from exc
     extension = FORMAT_EXTENSIONS.get(str(image_format).upper())
@@ -183,8 +193,8 @@ def download_images(urls, output_dir):
     return results
 
 
-def download_link(url, output_dir, max_images=24):
-    if max_images <= 0:
+def download_link(url, output_dir, max_images=DEFAULT_MAX_IMAGES):
+    if isinstance(max_images, bool) or not isinstance(max_images, int) or max_images <= 0:
         raise ValueError("max-images debe ser mayor que cero")
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"}:
@@ -209,7 +219,7 @@ def main():
     parser = argparse.ArgumentParser(description="Descarga todas las imágenes de un post de X/Twitter.")
     parser.add_argument("url")
     parser.add_argument("output_dir", type=Path)
-    parser.add_argument("--max-images", type=int, default=24)
+    parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES)
     args = parser.parse_args()
     try:
         results = download_link(args.url, args.output_dir, args.max_images)

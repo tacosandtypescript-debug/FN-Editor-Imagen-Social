@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-JOBS = ROOT / 'jobs'
+JOBS = ROOT / 'examples' / 'historical'
 im=Image.open(JOBS / 'admin_codes_base.png').convert('RGBA')
 d=ImageDraw.Draw(im,'RGBA'); fp=ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'
 font=ImageFont.truetype(fp,19); head=ImageFont.truetype(fp,25)

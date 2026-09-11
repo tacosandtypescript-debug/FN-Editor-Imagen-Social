@@ -6,21 +6,27 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
+sys.path.insert(0, str(ROOT / "tests"))
 
-from fetch_media import extract_media_urls, parse_x_status_url
+from fetch_media import download_link, extract_media_urls, parse_x_status_url
+from fixtures.images import image_bytes, make_image
+import edit_link as edit_link_module
 
 
 COMPOSER = ROOT / "bin" / "compose_image.py"
+EDIT_LINK = ROOT / "bin" / "edit_link.py"
 SKILL_COMPOSER = ROOT / "skills" / "media" / "vertical-image-editor" / "scripts" / "compose_image.py"
 SQUARE_SKILL_COMPOSER = ROOT / "skills" / "media" / "square-image-editor" / "scripts" / "compose_image.py"
 PRESET = ROOT / "bin" / "preset.json"
 SQUARE_PRESET = ROOT / "skills" / "media" / "square-image-editor" / "references" / "presets" / "fortnite_square_image.json"
+VERTICAL_PRESET = ROOT / "skills" / "media" / "vertical-image-editor" / "references" / "presets" / "fortnite_vertical_image.json"
 COMPOSER_SPEC = importlib.util.spec_from_file_location("compose_image_under_test", COMPOSER)
 COMPOSER_MODULE = importlib.util.module_from_spec(COMPOSER_SPEC)
 COMPOSER_SPEC.loader.exec_module(COMPOSER_MODULE)
@@ -33,7 +39,11 @@ class ComposeImageTests(unittest.TestCase):
         self.inputs = []
         for index in range(4):
             path = self.work / f"input-{index}.png"
-            Image.new("RGB", (320 + index * 20, 180 + index * 10), (40 + index * 30, 80, 140)).save(path)
+            make_image(
+                path,
+                size=(320 + index * 20, 180 + index * 10),
+                color=(40 + index * 30, 80, 140),
+            )
             self.inputs.append(path)
 
     def tearDown(self):
@@ -278,6 +288,165 @@ class ComposeImageTests(unittest.TestCase):
         self.assertAlmostEqual(cells[0][0], cells[1][0], places=5)
         self.assertGreater(cells[1][1], cells[0][1])
         self.assertLessEqual(max(y + h for _, y, _, h in cells), total_height + 0.01)
+
+    def test_download_link_accepts_png_and_jpeg(self):
+        payloads = {
+            "https://cdn.example/card.png": image_bytes("PNG"),
+            "https://cdn.example/card.jpg": image_bytes("JPEG"),
+        }
+
+        def fake_request(url, *args, **kwargs):
+            return payloads[url]
+
+        with patch("fetch_media.request_bytes", side_effect=fake_request):
+            for suffix, expected_format in ((".png", "PNG"), (".jpg", "JPEG")):
+                output_dir = self.work / f"download{suffix}"
+                results = download_link(
+                    f"https://cdn.example/card{suffix}", output_dir
+                )
+                self.assertEqual(len(results), 1)
+                self.assertEqual(results[0]["format"], expected_format)
+                destination = Path(results[0]["path"])
+                self.assertEqual(destination.suffix, suffix)
+                with Image.open(destination) as image:
+                    self.assertEqual(image.format, expected_format)
+                    self.assertEqual(image.size, (32, 16))
+
+    def test_invalid_preset_is_rejected_before_rendering(self):
+        preset = self.work / "invalid.json"
+        preset.write_text('{"canvas": {"width": 0}}', encoding="utf-8")
+
+        with self.assertRaises(ValueError) as context:
+            COMPOSER_MODULE.load_cfg(preset)
+
+        self.assertIn("positivos", str(context.exception))
+
+    def test_bundled_presets_pass_schema_validation(self):
+        for preset in (PRESET, VERTICAL_PRESET, SQUARE_PRESET):
+            with self.subTest(preset=preset):
+                config = COMPOSER_MODULE.load_cfg(preset)
+                self.assertIn("canvas", config)
+                self.assertGreater(config["canvas"]["width"], 0)
+                self.assertGreater(config["canvas"]["height"], 0)
+
+    def test_format_dimensions_rejects_extreme_output(self):
+        self.assertEqual(
+            COMPOSER_MODULE.format_dimensions("4:5"),
+            (1080, 1350),
+        )
+        with self.assertRaises(ValueError):
+            COMPOSER_MODULE.format_dimensions("1:100")
+
+    def test_max_image_count_is_enforced(self):
+        output = self.work / "too-many.png"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(COMPOSER),
+                str(self.inputs[0]),
+                str(self.inputs[1]),
+                str(self.inputs[2]),
+                str(output),
+                "--top",
+                "TITULAR",
+                "--bottom",
+                "CONTEXTO",
+                "--preset",
+                str(PRESET),
+                "--max-images",
+                "2",
+            ],
+            cwd=self.work,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("maximo configurado", result.stderr)
+
+    def test_unsupported_explicit_layout_is_rejected(self):
+        extra = self.work / "input-4.png"
+        make_image(extra, size=(400, 220), color=(90, 80, 140))
+        output = self.work / "unsupported.png"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(COMPOSER),
+                *(str(path) for path in [*self.inputs, extra]),
+                str(output),
+                "--top",
+                "TITULAR",
+                "--bottom",
+                "CONTEXTO",
+                "--preset",
+                str(PRESET),
+                "--style",
+                "bento",
+            ],
+            cwd=self.work,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no admite 5 imagenes", result.stderr)
+
+    def test_edit_link_exposes_composer_options(self):
+        result = subprocess.run(
+            [sys.executable, str(EDIT_LINK), "--help"],
+            cwd=self.work,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for option in ("--background", "--style", "--format", "--fit", "--max-images"):
+            self.assertIn(option, result.stdout)
+
+    def test_edit_link_forwards_composer_options(self):
+        args = edit_link_module.argparse.Namespace(
+            output=self.work / "out.png",
+            top="TITULAR",
+            bottom="CONTEXTO",
+            preset=PRESET,
+            style="adaptive",
+            fit="contain",
+            max_images=7,
+            output_format="1:1",
+            background=self.work / "background.jpg",
+        )
+
+        command = edit_link_module.build_composer_command(
+            args, [str(self.inputs[0]), str(self.inputs[1])]
+        )
+
+        self.assertIn("--background", command)
+        self.assertIn(str(args.background), command)
+        self.assertIn("--max-images", command)
+        self.assertIn("7", command)
+        self.assertIn("--format", command)
+        self.assertIn("1:1", command)
+        self.assertIn("--fit", command)
+        self.assertIn("contain", command)
+
+    def test_relative_preset_is_resolved_from_repository_root(self):
+        output = self.work / "relative-preset.png"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(COMPOSER),
+                str(self.inputs[0]),
+                str(output),
+                "--top",
+                "TITULAR",
+                "--bottom",
+                "CONTEXTO",
+                "--preset",
+                "bin/preset.json",
+            ],
+            cwd=self.work,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(output.is_file())
 
     def test_link_media_extraction_preserves_order(self):
         payload = {

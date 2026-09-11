@@ -2,7 +2,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-JOBS = ROOT / 'jobs'
+JOBS = ROOT / 'examples' / 'historical'
 im=Image.open(JOBS / 'power_hours_base.jpg').convert('RGBA')
 s=Image.open(JOBS / 'schedule.png').convert('RGBA')
 # Escala conservadora, sin deformar; solo texto blanco y banderas.

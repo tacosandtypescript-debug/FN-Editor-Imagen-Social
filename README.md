@@ -15,7 +15,8 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 - Scripts auxiliares de composición y renderizado de tablas/banderas.
 - Skills y reglas de edición en `skills/`.
 - Familia tipográfica Barlow incluida en `barlow_font/`.
-- Material de trabajo y ejemplos en `jobs/`.
+- Fixtures sintéticos para tests en `tests/fixtures/`.
+- Capturas y outputs históricos en `examples/historical/` (no forman parte de los tests).
 
 ## Requisitos
 
@@ -48,7 +49,8 @@ Para un lote de imágenes, se conserva el orden y el modo `auto` clasifica cada
 fuente: horizontal → celda 16:9, cercana a cuadrada → 1:1 y vertical → 9:16.
 Las celdas se recortan con `cover` sin deformar la imagen. En cualquier
 collage de 2 o más imágenes, `auto` usa `adaptive`; los estilos tradicionales
-se pueden forzar explícitamente.
+se pueden forzar explícitamente. `bento`, `mosaico`, `puzzle`, `jerarquico` y
+`asimetrico` requieren 2–4 imágenes; otra cantidad produce un error.
 
 Cuando hay exactamente dos imágenes cuadradas en un lienzo vertical, se
 apilan una arriba de la otra para aprovechar mejor el espacio. En un lienzo
@@ -64,6 +66,13 @@ python3 bin/compose_image.py img1.jpg img2.jpg img3.jpg salida.png \
 `--format` acepta proporciones como `1:1`, `4:5`, `16:9` y `9:16` (también
 `W:H`, `W x H` o `W/H`). La salida PNG conserva el tamaño equivalente a 1080
 px en el lado corto y se guarda sin compresión PNG.
+
+El compositor limita por defecto el lote a 24 imágenes; se puede cambiar con
+`--max-images`. Las dimensiones del preset y de la salida se validan antes de
+abrir las imágenes para evitar lienzos o entradas excesivamente grandes.
+
+Se puede elegir una imagen distinta para el fondo desenfocado con
+`--background fondo.jpg`.
 
 También se puede pasar directamente el enlace de un post de X/Twitter. Se
 descargan todas sus imágenes y se componen en el mismo orden:
@@ -90,6 +99,10 @@ python3 skills/media/square-image-editor/scripts/compose_image.py \
 Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
 `bin/edit_link.py`.
 
+`bin/edit_link.py` acepta las mismas opciones de composición (`--background`,
+`--style`, `--format`, `--fit` y `--max-images`) y las valida con el compositor
+canónico.
+
 La fuente Barlow se resuelve desde `barlow_font/` y el preset funciona aunque el
 comando se ejecute desde otro directorio.
 
@@ -98,6 +111,14 @@ comando se ejecute desde otro directorio.
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+Los tests crean imágenes pequeñas y deterministas en un directorio temporal;
+los archivos de `examples/historical/` son únicamente material de trabajos
+anteriores y no se usan como fixtures.
+
+El workflow de GitHub Actions repite la compilación y la suite en Python 3.10,
+3.11, 3.12 y 3.13. Las dependencias de ejecución están fijadas en
+`requirements.txt`.
 
 ## Reglas visuales
 

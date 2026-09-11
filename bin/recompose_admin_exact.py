@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pathlib import Path
 W,H=1080,1920
 ROOT = Path(__file__).resolve().parents[1]
-JOBS = ROOT / 'jobs'
+JOBS = ROOT / 'examples' / 'historical'
 src=Image.open(JOBS / 'admin_codes.jpg').convert('RGB')
 # Fondo blur cover
 scale=max(W/src.width,H/src.height)

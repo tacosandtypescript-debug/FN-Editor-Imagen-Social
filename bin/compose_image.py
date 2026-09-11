@@ -11,7 +11,7 @@ El ULTIMO argumento posicional es la salida; todos los anteriores son imagenes
 de entrada (1 = tarjeta simple, 2+ = collage).
 
 Estilos de collage (--style):
-  auto         -> elige segun N y proporcion de la primera imagen (defecto)
+  auto         -> usa grid para una imagen y adaptive para collages (defecto)
   grid         -> cuadricula uniforme para cualquier numero de imagenes
   adaptive     -> clasifica cada imagen (horizontal/cuadrada/vertical) y le
                   asigna una celda 16:9, 1:1 o 9:16 conservando el orden
@@ -27,8 +27,15 @@ rellena su rectangulo con cover centrado (nunca deforma; recorta los bordes
 justos). Usa --fit contain para conservar la imagen completa en cada celda.
 """
 import argparse, json, math, re, sys
+from collections.abc import Mapping
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageStat
+from runtime_config import (
+    DEFAULT_MAX_IMAGES,
+    MAX_CANVAS_EDGE,
+    MAX_CANVAS_PIXELS,
+    MAX_SOURCE_PIXELS,
+)
 
 SEG = re.compile(r"\{([^{}|]+)\|([0-9A-Fa-f]{6})\}")
 
@@ -158,8 +165,8 @@ def adaptive_layout(
         y += row_height + row_gap
     return cells, total_height
 
-def auto_style(N, ratio):
-    """Seleccion automatica basada en la orientacion de cada fuente."""
+def auto_style(N):
+    """Seleccion automatica basada en el numero de fuentes."""
     if N > 1:
         return "adaptive"
     return "grid"
@@ -181,10 +188,158 @@ def grid_dims(N, ratio):
     return best[1], best[2]
 
 
+def _validate_canvas_dimensions(width, height, label="el lienzo"):
+    if isinstance(width, bool) or not isinstance(width, int):
+        raise ValueError(f"{label}: el ancho debe ser un entero")
+    if isinstance(height, bool) or not isinstance(height, int):
+        raise ValueError(f"{label}: el alto debe ser un entero")
+    if width <= 0 or height <= 0:
+        raise ValueError(f"{label}: el ancho y el alto deben ser positivos")
+    if width > MAX_CANVAS_EDGE or height > MAX_CANVAS_EDGE:
+        raise ValueError(
+            f"{label}: cada lado debe ser como maximo {MAX_CANVAS_EDGE}px"
+        )
+    if width * height > MAX_CANVAS_PIXELS:
+        raise ValueError(
+            f"{label}: el area no puede superar {MAX_CANVAS_PIXELS:,} pixeles"
+        )
+
+
+def _validate_number(value, label, minimum=None, maximum=None):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} debe ser numerico")
+    if not math.isfinite(float(value)):
+        raise ValueError(f"{label} debe ser finito")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{label} debe ser >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{label} debe ser <= {maximum}")
+
+
+def _validate_offset(value, label):
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{label} debe tener exactamente dos valores")
+    for index, item in enumerate(value):
+        _validate_number(item, f"{label}[{index}]")
+
+
+def validate_config(cfg):
+    """Validate the supported preset schema before rendering starts."""
+    if not isinstance(cfg, Mapping):
+        raise ValueError("el preset debe contener un objeto JSON")
+
+    canvas = cfg.get("canvas")
+    if not isinstance(canvas, Mapping):
+        raise ValueError("canvas debe ser un objeto con width y height")
+    if "width" not in canvas or "height" not in canvas:
+        raise ValueError("canvas debe incluir width y height")
+    _validate_canvas_dimensions(canvas["width"], canvas["height"], "canvas")
+
+    numeric_rules = {
+        "gap": (0, None),
+        "font_size": (1, None),
+        "min_font_size": (1, None),
+        "max_text_width": (1, None),
+        "text_margin": (0, None),
+        "outline_width": (0, None),
+        "foreground_max_width": (1, None),
+        "foreground_max_height": (0, None),
+        "corner_radius": (0, None),
+        "grid_gap": (0, None),
+        "grid_padding": (0, None),
+        "outer_margin": (0, None),
+        "line_gap": (0, None),
+        "watermark_gap": (0, None),
+        "background_blur": (0, None),
+        "background_dim": (0, 2),
+    }
+    for key, (minimum, maximum) in numeric_rules.items():
+        if key in cfg:
+            _validate_number(cfg[key], key, minimum, maximum)
+
+    if "font_size" in cfg and "min_font_size" in cfg:
+        if cfg["min_font_size"] > cfg["font_size"]:
+            raise ValueError("min_font_size no puede superar font_size")
+
+    width, height = canvas["width"], canvas["height"]
+    if 2 * cfg.get("grid_padding", 0) >= width:
+        raise ValueError("grid_padding deja menos de un pixel de ancho util")
+    if 2 * cfg.get("text_margin", 0) >= width:
+        raise ValueError("text_margin deja menos de un pixel de ancho util")
+    if 2 * cfg.get("outer_margin", 0) >= height:
+        raise ValueError("outer_margin deja menos de un pixel de alto util")
+
+    font_value = cfg.get("font", "")
+    if not isinstance(font_value, str):
+        raise ValueError("font debe ser una ruta de texto")
+
+    for section_name in ("shadow", "text_shadow"):
+        section = cfg.get(section_name)
+        if section is None:
+            continue
+        if not isinstance(section, Mapping):
+            raise ValueError(f"{section_name} debe ser un objeto")
+        if "blur" in section:
+            _validate_number(section["blur"], f"{section_name}.blur", 0)
+        if "opacity" in section:
+            _validate_number(section["opacity"], f"{section_name}.opacity", 0, 255)
+        if "offset" in section:
+            _validate_offset(section["offset"], f"{section_name}.offset")
+
+    watermark = cfg.get("watermark")
+    if watermark is not None:
+        if not isinstance(watermark, Mapping):
+            raise ValueError("watermark debe ser un objeto")
+        if "text" in watermark and not isinstance(watermark["text"], str):
+            raise ValueError("watermark.text debe ser texto")
+        if "size" in watermark:
+            _validate_number(watermark["size"], "watermark.size", 1)
+        if "opacity" in watermark:
+            _validate_number(watermark["opacity"], "watermark.opacity", 0, 255)
+        if "bottom_margin" in watermark:
+            _validate_number(watermark["bottom_margin"], "watermark.bottom_margin", 0)
+        if "side_mode" in watermark and watermark["side_mode"] not in {
+            "auto", "side", "lateral"
+        }:
+            raise ValueError("watermark.side_mode debe ser auto, side o lateral")
+        if "side" in watermark and watermark["side"] not in {"auto", "left", "right"}:
+            raise ValueError("watermark.side debe ser auto, left o right")
+
+    palette = cfg.get("palette")
+    if palette is not None and not isinstance(palette, Mapping):
+        raise ValueError("palette debe ser un objeto")
+    return cfg
+
+
+def _merge_config(base, override):
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(base.get(key), Mapping):
+            _merge_config(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _resolve_preset_path(preset_path):
+    requested = Path(preset_path)
+    if requested.is_absolute():
+        return requested
+    candidates = [
+        Path.cwd() / requested,
+        Path(__file__).resolve().parents[1] / requested,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
 def format_dimensions(value, default=(1080, 1920)):
     """Resolve a ratio such as 1:1, 4:5, 16:9 or 9:16 to pixels."""
     if not value:
-        return int(default[0]), int(default[1])
+        dimensions = (int(default[0]), int(default[1]))
+        _validate_canvas_dimensions(*dimensions, "el lienzo")
+        return dimensions
     match = re.fullmatch(r"\s*(\d+)\s*[:x/]\s*(\d+)\s*", str(value))
     if not match:
         raise ValueError("el formato debe ser PROPORCION, por ejemplo 1:1, 4:5 o 9:16")
@@ -193,8 +348,21 @@ def format_dimensions(value, default=(1080, 1920)):
         raise ValueError("la proporcion debe tener valores positivos")
     short_edge = 1080
     if aspect_w >= aspect_h:
-        return round(short_edge * aspect_w / aspect_h), short_edge
-    return short_edge, round(short_edge * aspect_h / aspect_w)
+        dimensions = (round(short_edge * aspect_w / aspect_h), short_edge)
+    else:
+        dimensions = (short_edge, round(short_edge * aspect_h / aspect_w))
+    _validate_canvas_dimensions(*dimensions, "la salida")
+    return dimensions
+
+
+def positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("debe ser un entero positivo") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("debe ser un entero positivo")
+    return parsed
 
 # ── utilidades ──────────────────────────────────────────────────────────────
 def segments(s, default_color="#FFFFFF"):
@@ -218,6 +386,23 @@ def font_for(path, size):
         return ImageFont.truetype("DejaVuSans-BoldOblique.ttf", size)
     except OSError:
         return ImageFont.load_default()
+
+
+def load_image(path, label="imagen"):
+    """Open an image into memory while closing the underlying file handle."""
+    path = Path(path)
+    try:
+        with Image.open(path) as opened:
+            width, height = opened.size
+            if width <= 0 or height <= 0:
+                raise ValueError("sus dimensiones deben ser positivas")
+            if width * height > MAX_SOURCE_PIXELS:
+                raise ValueError(
+                    f"supera el maximo de {MAX_SOURCE_PIXELS:,} pixeles"
+                )
+            return opened.convert("RGB")
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} '{path}' no es valida: {exc}") from exc
 
 def block_at_size(draw, text, cfg, size):
     """Measure a multiline text block using one font size for every line."""
@@ -362,11 +547,14 @@ def draw_watermark(im, cfg, n_images=1):
     im.alpha_composite(layer)
 
 
-def watermark_geometry(height, cfg):
+def watermark_geometry(height, cfg, n_images=1):
     """Return the visible watermark bounds so the layout can avoid it."""
     wm = cfg.get("watermark", {})
     text = wm.get("text", "")
     if not text:
+        return None
+    side_mode = wm.get("side_mode", "auto")
+    if side_mode in ("side", "lateral") or (side_mode == "auto" and n_images >= 2):
         return None
     font = font_for(wm.get("font", cfg.get("font", "")), int(wm.get("size", 46)))
     layer = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
@@ -445,24 +633,42 @@ def load_cfg(preset_path):
         "background_blur": 16,
         "background_dim": 0.92,
     }
+    preset_file = None
     if preset_path:
-        with open(preset_path, encoding="utf-8") as fh:
-            defaults.update(json.load(fh))
+        preset_file = _resolve_preset_path(preset_path)
+        try:
+            with open(preset_file, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+        except FileNotFoundError as exc:
+            raise ValueError(f"no se encontro el preset: {preset_path}") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"el preset no contiene JSON valido ({preset_path}): {exc.msg}"
+            ) from exc
+        except OSError as exc:
+            raise ValueError(f"no se pudo leer el preset {preset_path}: {exc}") from exc
+        if not isinstance(loaded, Mapping):
+            raise ValueError("el preset debe contener un objeto JSON")
+        _merge_config(defaults, loaded)
+    validate_config(defaults)
 
     # Resolve bundled fonts from the repository instead of depending on the
     # absolute path of the machine that created the preset.
     font_value = defaults.get("font", "")
     if font_value:
         font_path = Path(str(font_value))
+        candidates = [font_path] if font_path.is_absolute() else [Path.cwd() / font_path]
         if not font_path.is_absolute():
-            candidates = [Path.cwd() / font_path]
-            if preset_path:
-                candidates.append(Path(preset_path).resolve().parent / font_path)
+            if preset_file:
+                candidates.append(preset_file.resolve().parent / font_path)
             candidates.append(Path(__file__).resolve().parents[1] / font_path)
-            for candidate in candidates:
-                if candidate.is_file():
-                    defaults["font"] = str(candidate)
-                    break
+        for candidate in candidates:
+            if candidate.is_file():
+                defaults["font"] = str(candidate)
+                break
+        else:
+            raise ValueError(f"no se encontro la fuente del preset: {font_value}")
+    validate_config(defaults)
     return defaults
 
 def main():
@@ -471,11 +677,15 @@ def main():
     ap.add_argument("--top", required=True)
     ap.add_argument("--bottom", required=True)
     ap.add_argument("--preset", default=None)
+    ap.add_argument(
+        "--max-images", type=positive_int, default=DEFAULT_MAX_IMAGES,
+        help=f"maximo de imagenes de entrada (defecto: {DEFAULT_MAX_IMAGES})",
+    )
     ap.add_argument("--background", default=None,
                     help="imagen externa para el fondo desenfocado")
     ap.add_argument("--style", default="auto",
                     choices=("auto",) + STYLES,
-                    help="estilo de collage (defecto: auto segun N y proporcion)")
+                    help="estilo de collage (defecto: auto segun la cantidad de imagenes)")
     ap.add_argument(
         "--format", dest="output_format", default=None,
         help="proporcion de salida, por ejemplo 1:1, 4:5, 16:9 o 9:16",
@@ -488,7 +698,22 @@ def main():
     if len(a.inputs) < 2:
         ap.error("hace falta al menos una imagen de entrada y una salida")
     *src_paths, out_path = a.inputs
-    cfg = load_cfg(a.preset)
+    if len(src_paths) > a.max_images:
+        ap.error(
+            f"se recibieron {len(src_paths)} imagenes; el maximo configurado es {a.max_images}"
+        )
+    N = len(src_paths)
+    style = auto_style(N) if a.style == "auto" else a.style
+    if style not in {"grid", "adaptive"} and (style, N) not in LAYOUTS:
+        supported = sorted(count for layout, count in LAYOUTS if layout == style)
+        supported_text = ", ".join(str(count) for count in supported)
+        ap.error(
+            f"el estilo '{style}' no admite {N} imagenes; admite {supported_text}"
+        )
+    try:
+        cfg = load_cfg(a.preset)
+    except ValueError as exc:
+        ap.error(str(exc))
     try:
         W, H = format_dimensions(
             a.output_format,
@@ -497,10 +722,12 @@ def main():
     except ValueError as exc:
         ap.error(str(exc))
     cfg["canvas"] = {"width": W, "height": H}
-    srcs = [Image.open(p).convert("RGB") for p in src_paths]
-    N = len(srcs)
+    try:
+        validate_config(cfg)
+        srcs = [load_image(p) for p in src_paths]
+    except ValueError as exc:
+        ap.error(str(exc))
     ratio = srcs[0].width / srcs[0].height
-    orientation_buckets = {aspect_bucket(src.size)[0] for src in srcs}
     if N > 1 and len({src.size for src in srcs}) > 1:
         print(
             "AVISO: las imagenes no tienen el mismo tamano; se ajustaran a su orientacion",
@@ -508,13 +735,10 @@ def main():
             flush=True,
         )
 
-    style = auto_style(N, ratio) if a.style == "auto" else a.style
-    if a.style == "auto" and (N >= 5 or len(orientation_buckets) > 1):
-        style = "adaptive"
-    if style not in {"grid", "adaptive"} and (style, N) not in LAYOUTS:
-        style = "adaptive" if N >= 5 else "grid"
-
-    bg_src = Image.open(a.background).convert("RGB") if a.background else srcs[0]
+    try:
+        bg_src = load_image(a.background, "el fondo") if a.background else srcs[0]
+    except ValueError as exc:
+        ap.error(str(exc))
     bg = make_bg(bg_src, cfg)
     probe = ImageDraw.Draw(bg)
     gap = cfg.get("gap", 32)
@@ -528,7 +752,7 @@ def main():
     # Reserve the watermark's visible area. The content is centered in the
     # remaining safe rectangle instead of being centered over the full canvas.
     safe_top = int(outm)
-    wm_geometry = watermark_geometry(H, cfg)
+    wm_geometry = watermark_geometry(H, cfg, N)
     safe_bottom = H - int(outm)
     if wm_geometry:
         safe_bottom = min(

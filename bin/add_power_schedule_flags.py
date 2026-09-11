@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-JOBS = ROOT / 'jobs'
+JOBS = ROOT / 'examples' / 'historical'
 im=Image.open(JOBS / 'power_hours_base.jpg').convert('RGBA')
 d=ImageDraw.Draw(im,'RGBA'); fp=ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'
 head=ImageFont.truetype(fp,30); white=(255,255,255,255); purple=(139,61,255,255); orange=(255,122,0,255)

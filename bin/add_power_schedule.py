@@ -2,8 +2,8 @@ from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-src = ROOT / 'jobs' / 'power_hours_base.jpg'
-out = ROOT / 'jobs' / 'power_hours_card_complete.jpg'
+src = ROOT / 'examples' / 'historical' / 'power_hours_base.jpg'
+out = ROOT / 'examples' / 'historical' / 'power_hours_card_complete.jpg'
 im = Image.open(src).convert('RGBA')
 d = ImageDraw.Draw(im, 'RGBA')
 font_path = ROOT / 'barlow_font' / 'Barlow-BlackItalic.ttf'

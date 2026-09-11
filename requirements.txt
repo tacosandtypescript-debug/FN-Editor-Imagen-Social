@@ -1,2 +1,2 @@
-Pillow>=10.0
-python-xlib>=0.33
+Pillow==12.2.0
+python-xlib==0.33

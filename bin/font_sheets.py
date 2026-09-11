@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 FONTDIR = ROOT / 'barlow_font'
-OUTDIR = ROOT / 'jobs'
+OUTDIR = ROOT / 'examples' / 'historical'
 W, H = 1080, 1920
 BG = (27, 32, 42)
 WHITE = (255, 255, 255)

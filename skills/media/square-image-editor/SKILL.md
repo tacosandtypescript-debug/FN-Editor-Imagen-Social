@@ -36,6 +36,7 @@ python3 skills/media/square-image-editor/scripts/compose_image.py \
   --top 'TITULAR {CLAVE|8B3DFF}' \
   --bottom 'CONTEXTO · 03/09' \
   --fit auto \
+  [--max-images 24] [--background fondo.jpg] \
   --preset skills/media/square-image-editor/references/presets/fortnite_square_image.json
 ```
 
@@ -63,6 +64,8 @@ python3 bin/edit_link.py 'https://x.com/USUARIO/status/ID' salida.png \
 - Las imágenes mixtas conservan su orden y cada una recibe su propia forma.
 - El recorte por defecto es `cover` centrado, sin deformar; usar `--fit contain`
   únicamente si se necesita conservar toda la imagen.
+- Los layouts editoriales explícitos admiten 2–4 imágenes; una cantidad distinta
+  produce un error claro.
 
 ## Reglas visuales
 

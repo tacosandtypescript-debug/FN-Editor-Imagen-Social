@@ -64,6 +64,7 @@ python3 skills/media/vertical-image-editor/scripts/compose_image.py img1.jpg [im
   --top 'TEXTO {CLAVE|FFD700}' --bottom 'CONTEXTO · 03/09' \
   [--format 9:16] [--fit auto|cover|contain] \
   [--style auto|adaptive|grid|bento|mosaico|puzzle|jerarquico|asimetrico] \
+  [--max-images 24] [--background fondo.jpg] \
   --preset skills/media/vertical-image-editor/references/presets/fortnite_vertical_image.json
 ```
 
@@ -139,7 +140,7 @@ necesarios para entender la noticia.
 ## Collage 2+ imagenes: estilos de acomodo
 
 Estilos disponibles (seleccion **automatica por defecto** segun numero de
-imagenes y proporcion; Isaac puede forzar con `--style`):
+imagenes; Isaac puede forzar con `--style`):
 
 - **auto** (defecto): cualquier collage de 2 o más imágenes usa `adaptive`,
   incluso cuando todas comparten orientación. Así una horizontal nunca cae en
@@ -167,6 +168,10 @@ deforman; recortan solo los bordes sobrantes). La tarjeta simple usa
 Si las imágenes tienen tamaños distintos, se avisa pero no se detiene el
 proceso: la clasificación usa el ancho/alto real de cada archivo y el motor
 las acomoda de manera independiente.
+
+Los layouts `bento`, `mosaico`, `puzzle`, `jerarquico` y `asimetrico` admiten
+exactamente 2, 3 o 4 imágenes. Si se fuerza uno de ellos con otra cantidad, el
+compositor falla explícitamente en vez de sustituirlo silenciosamente.
 
 ## Video en el tweet
 

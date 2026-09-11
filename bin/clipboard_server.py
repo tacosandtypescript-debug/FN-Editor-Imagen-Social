@@ -11,7 +11,7 @@ from Xlib.error import DisplayNameError
 ROOT = Path(__file__).resolve().parents[1]
 ap = argparse.ArgumentParser()
 ap.add_argument(
-    'image', nargs='?', default=str(ROOT / 'jobs' / 'guille_card.png'),
+    'image', nargs='?', default=str(ROOT / 'examples' / 'historical' / 'guille_card.png'),
     help='PNG que se ofrecerá en el portapapeles',
 )
 a = ap.parse_args()
