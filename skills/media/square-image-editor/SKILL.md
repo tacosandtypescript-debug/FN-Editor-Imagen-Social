@@ -1,7 +1,7 @@
 ---
 name: square-image-editor
 description: "Use when editing Fortnite news images into square cards."
-version: 1.0.0
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 platforms: [linux, macos]

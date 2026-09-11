@@ -11,6 +11,9 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 - `skills/media/vertical-image-editor/scripts/compose_image.py`: entrada
   compatible con la skill que delega en el compositor principal.
 - `skills/media/square-image-editor/`: skill, wrapper y preset para tarjetas 1:1.
+- `skills/media/editar-publicar-instagram/`: flujo documentado de entrega al
+  publicador externo `igpub`.
+- `skills/README.md`: inventario, contrato de integración y verificación de las skills.
 - Presets JSON con tipografía, paleta, sombras, márgenes y marca de creador.
 - Scripts auxiliares de composición y renderizado de tablas/banderas.
 - Skills y reglas de edición en `skills/`.
@@ -20,7 +23,8 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 
 ## Requisitos
 
-- Linux
+- Linux o macOS para el editor principal
+- Linux con X11 si se usa `bin/clipboard_server.py`
 - Python 3.10+
 - Pillow
 - `python-xlib` (solo para `bin/clipboard_server.py`)
@@ -28,12 +32,18 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 - Google Chrome/Chromium (solo para renderizar tablas HTML con banderas)
 - Fuente Barlow incluida o instalada en el sistema
 
+Las skills de edición son locales y comparten el compositor canónico. La skill
+de publicación en Instagram solo conecta con el proyecto externo `igpub`; no
+incluye sus credenciales ni su worker. Consulta `skills/README.md` para el
+inventario y la comprobación de esa integración.
+
 Instalación mínima:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+python3 -m pip check
 ```
 
 ## Uso

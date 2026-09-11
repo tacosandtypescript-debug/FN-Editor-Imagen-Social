@@ -85,6 +85,13 @@ class ComposeImageTests(unittest.TestCase):
             self.assertEqual((image.width, image.height, image.format), (1080, 1920, "PNG"))
             self.assertEqual(image.mode, "RGBA")
 
+    def test_jpeg_output_is_written_as_rgb(self):
+        output = self.work / "main.jpg"
+        self.run_composer(COMPOSER, output)
+        with Image.open(output) as image:
+            self.assertEqual((image.width, image.height, image.format), (1080, 1920, "JPEG"))
+            self.assertEqual(image.mode, "RGB")
+
     def test_square_skill_wrapper_matches_canonical_compositor(self):
         square_inputs = []
         for index in range(2):

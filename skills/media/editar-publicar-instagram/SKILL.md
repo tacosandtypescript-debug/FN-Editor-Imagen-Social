@@ -1,7 +1,7 @@
 ---
 name: editar-publicar-instagram
 description: "Usar cuando Isaac pida publicar en Instagram o mandar a @StoryinstaTiktokbot."
-version: 1.1.0
+version: 1.2.0
 author: Isaac
 license: MIT
 platforms: [linux]
@@ -32,7 +32,18 @@ imagen editada (esta máquina)  ->  python3 "$IGPUB_DIR/enqueue.py" post|story <
 ```
 
 Define `IGPUB_DIR` con la ruta local del proyecto externo `igpub` antes de usar
-este flujo; no se asume una ruta fija de usuario.
+este flujo; no se asume una ruta fija de usuario. Este repositorio no incluye
+`igpub`, sus workers ni sus credenciales: la skill queda instalada y
+documentada, pero la publicación requiere que ese proyecto externo esté
+presente y que contenga `enqueue.py` y `queue_worker.py`.
+
+Antes de encolar, comprobar la integración:
+
+```bash
+test -f "$IGPUB_DIR/enqueue.py"
+test -f "$IGPUB_DIR/queue_worker.py"
+test -d "$IGPUB_DIR/queue/in"
+```
 
 ## Pasos
 

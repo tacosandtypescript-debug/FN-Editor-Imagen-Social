@@ -4,9 +4,6 @@ from io import BytesIO
 import os
 import struct
 from pathlib import Path
-from PIL import Image
-from Xlib import X, Xatom, display
-from Xlib.error import DisplayNameError
 
 ROOT = Path(__file__).resolve().parents[1]
 ap = argparse.ArgumentParser()
@@ -15,6 +12,16 @@ ap.add_argument(
     help='PNG que se ofrecerá en el portapapeles',
 )
 a = ap.parse_args()
+
+try:
+    from PIL import Image
+    from Xlib import X, Xatom, display
+    from Xlib.error import DisplayNameError
+except ImportError as exc:
+    raise SystemExit(
+        "faltan dependencias para el portapapeles; instala requirements.txt"
+    ) from exc
+
 with open(a.image, 'rb') as fh:
     PNG = fh.read()
 with Image.open(a.image) as image:

@@ -1,7 +1,7 @@
 ---
 name: vertical-image-editor
 description: "Use when editing Fortnite news images into vertical cards."
-version: 2.1.0
+version: 2.2.0
 author: Hermes Agent
 license: MIT
 platforms: [linux, macos]
