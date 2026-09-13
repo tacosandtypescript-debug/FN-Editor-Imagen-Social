@@ -8,6 +8,7 @@
   "outline_width": 6,
   "foreground_max_width": 960,
   "foreground_max_height": 650,
+  "equal_pair_cells": true,
   "corner_radius": 42,
   "grid_gap": 24,
   "grid_padding": 48,

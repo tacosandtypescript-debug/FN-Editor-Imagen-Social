@@ -1,0 +1,3 @@
+# Optional CUDA backend for NVIDIA GPUs.
+# The ctk extra supplies CUDA runtime/compiler headers needed by CuPy kernels.
+cupy-cuda12x[ctk]==14.2.0

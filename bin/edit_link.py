@@ -34,6 +34,8 @@ def build_composer_command(args, input_paths):
         args.style,
         "--fit",
         args.fit,
+        "--backend",
+        getattr(args, "backend", "auto"),
         "--max-images",
         str(args.max_images),
     ]
@@ -63,6 +65,10 @@ def main():
     )
     parser.add_argument("--format", dest="output_format", default=None)
     parser.add_argument("--fit", choices=("auto", "cover", "contain"), default="auto")
+    parser.add_argument(
+        "--backend", choices=("auto", "cpu", "gpu"), default="auto",
+        help="backend de píxeles: auto detecta CUDA y conserva CPU como fallback",
+    )
     parser.add_argument(
         "--max-images", type=positive_int, default=DEFAULT_MAX_IMAGES,
         help=f"maximo de imagenes descargadas (defecto: {DEFAULT_MAX_IMAGES})",

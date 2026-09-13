@@ -62,7 +62,7 @@ Estas reglas solo se aplican cuando una publicación incluya grupos de banderas 
 ```bash
 python3 skills/media/vertical-image-editor/scripts/compose_image.py img1.jpg [img2..imgN] salida.png \
   --top 'TEXTO {CLAVE|FFD700}' --bottom 'CONTEXTO · 03/09' \
-  [--format 9:16] [--fit auto|cover|contain] \
+  [--format 9:16] [--fit auto|cover|contain] [--backend auto|cpu|gpu] \
   [--style auto|adaptive|grid|bento|mosaico|puzzle|jerarquico|asimetrico] \
   [--max-images 24] [--background fondo.jpg] \
   --preset skills/media/vertical-image-editor/references/presets/fortnite_vertical_image.json
@@ -71,6 +71,12 @@ python3 skills/media/vertical-image-editor/scripts/compose_image.py img1.jpg [im
 El ULTIMO argumento es la salida. 1 imagen = tarjeta simple; 2 o más = collage.
 La ruta de `scripts/compose_image.py` es una entrada compatible; la lógica vive
 en `bin/compose_image.py` para evitar que ambas implementaciones diverjan.
+
+`--backend auto` detecta CUDA y usa el backend GPU para fondos y superficies
+grandes; las celdas pequeñas conservan el redimensionado LANCZOS de Pillow
+para evitar que la transferencia a la GPU las vuelva más lentas. Si CUDA
+no está disponible, `auto` cae a CPU. `--backend gpu` exige CUDA y
+muestra un error claro si falta; `--backend cpu` desactiva CUDA.
 
 Para trabajar directamente desde un enlace de X/Twitter y tomar todas las
 imágenes del post en su orden original:

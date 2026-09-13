@@ -35,7 +35,7 @@ python3 skills/media/square-image-editor/scripts/compose_image.py \
   img1.jpg [img2..imgN] salida.png \
   --top 'TITULAR {CLAVE|8B3DFF}' \
   --bottom 'CONTEXTO · 03/09' \
-  --fit auto \
+  --fit contain \
   [--max-images 24] [--background fondo.jpg] \
   --preset skills/media/square-image-editor/references/presets/fortnite_square_image.json
 ```
@@ -61,7 +61,13 @@ python3 bin/edit_link.py 'https://x.com/USUARIO/status/ID' salida.png \
 - Ratio 0.8–1.25 → celda cuadrada 1:1.
 - Ratio ≤0.8 → celda vertical 9:16.
 - En un lienzo cuadrado, dos imágenes cuadradas se colocan lado a lado.
-- Las imágenes mixtas conservan su orden y cada una recibe su propia forma.
+- El preset cuadrado activa `equal_pair_cells` para cualquier pareja de
+  imágenes: ambos paneles son cuadrados del mismo tamaño y quedan en una sola
+  fila. Usar `--fit contain` cuando las fuentes tengan proporciones distintas;
+  la fuente completa queda centrada dentro de su panel, con relleno del fondo,
+  sin recortarla ni deformarla.
+- Las imágenes mixtas conservan su orden y cada una recibe su propia forma
+  cuando no está activa la pareja de celdas iguales.
 - El recorte por defecto es `cover` centrado, sin deformar; usar `--fit contain`
   únicamente si se necesita conservar toda la imagen.
 - Los layouts editoriales explícitos admiten 2–4 imágenes; una cantidad distinta

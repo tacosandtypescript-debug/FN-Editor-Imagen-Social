@@ -46,6 +46,23 @@ pip install -r requirements.txt
 python3 -m pip check
 ```
 
+### Backend GPU opcional
+
+El compositor puede acelerar redimensionado y fondo desenfocado con CUDA cuando
+hay una GPU NVIDIA compatible. La instalación base sigue siendo solo CPU; para
+activar el backend GPU instala las dependencias opcionales:
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-gpu.txt
+.venv/bin/python bin/compose_image.py imagen.jpg salida.png \\
+  --top 'TITULAR' --bottom 'CONTEXTO' --backend auto \\
+  --preset bin/preset.json
+```
+
+`--backend auto` usa CUDA si puede inicializarlo y vuelve a CPU si no; usa
+`--backend gpu` para exigir CUDA o `--backend cpu` para desactivarlo. El backend
+GPU no cambia el diseño, las dimensiones ni el formato de salida.
+
 ## Uso
 
 ```bash
@@ -96,13 +113,17 @@ python3 bin/edit_link.py 'https://x.com/usuario/status/123456789' salida.png \
 El flujo admite además una URL directa de imagen. Por seguridad, limita cada
 descarga a 25 MB y el lote a 24 imágenes salvo que se cambie `--max-images`.
 
-Para usar el mismo flujo en una tarjeta cuadrada, usa el preset 1:1:
+Para usar el mismo flujo en una tarjeta cuadrada, usa el preset 1:1. En una
+pareja de imágenes, ese preset crea dos paneles cuadrados iguales y los coloca
+en una sola fila; `--fit contain` conserva completa cualquier fuente vertical
+o de otra proporción dentro de su panel.
 
 ```bash
 python3 skills/media/square-image-editor/scripts/compose_image.py \
   img1.jpg img2.jpg salida.png \
   --top 'TITULAR {CLAVE|8B3DFF}' \
   --bottom 'CONTEXTO · 03/09' \
+  --fit contain \
   --preset skills/media/square-image-editor/references/presets/fortnite_square_image.json
 ```
 

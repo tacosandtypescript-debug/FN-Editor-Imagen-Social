@@ -134,6 +134,8 @@ class ProjectIntegrityTests(unittest.TestCase):
                     "background_dim",
                 ):
                     self.assertIn(key, config, f"{preset}: falta {key}")
+                if preset == SKILL_SPECS["square-image-editor"]["preset"]:
+                    self.assertIs(config.get("equal_pair_cells"), True)
                 self.assertEqual(
                     (config["canvas"]["width"], config["canvas"]["height"]),
                     expected["size"],

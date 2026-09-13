@@ -276,6 +276,50 @@ class ComposeImageTests(unittest.TestCase):
         self.assertAlmostEqual(cells[2][2] / cells[2][3], 9 / 16, places=5)
         self.assertLessEqual(max(y + h for _, y, _, h in cells), total_height + 0.01)
 
+    def test_equal_pair_cells_make_mixed_square_pair_uniform(self):
+        images = [
+            Image.new("RGB", (1080, 1350)),
+            Image.new("RGB", (1178, 1178)),
+        ]
+        cells, total_height = COMPOSER_MODULE.adaptive_layout(
+            images,
+            canvas_width=1080,
+            content_width=960,
+            max_height=650,
+            gap=24,
+            equal_pair_cells=True,
+        )
+
+        self.assertEqual(len(cells), 2)
+        self.assertAlmostEqual(cells[0][2], cells[1][2], places=5)
+        self.assertAlmostEqual(cells[0][3], cells[1][3], places=5)
+        self.assertAlmostEqual(cells[0][2] / cells[0][3], 1.0, places=5)
+        self.assertAlmostEqual(cells[0][1], cells[1][1], places=5)
+        self.assertAlmostEqual(
+            cells[1][0] - (cells[0][0] + cells[0][2]),
+            24,
+            places=5,
+        )
+        self.assertLessEqual(max(y + h for _, y, _, h in cells), total_height + 0.01)
+
+    def test_equal_square_source_keeps_mixed_image_complete(self):
+        image = Image.new("RGB", (4, 6), (20, 20, 20))
+        image.putpixel((0, 0), (255, 0, 0))
+        image.putpixel((3, 0), (0, 255, 0))
+        image.putpixel((0, 5), (0, 0, 255))
+        image.putpixel((3, 5), (255, 255, 0))
+
+        normalized = COMPOSER_MODULE.equal_square_source(
+            image,
+            {"background_blur": 0, "background_dim": 1.0},
+        )
+
+        self.assertEqual(normalized.size, (6, 6))
+        self.assertEqual(normalized.getpixel((1, 0)), (255, 0, 0))
+        self.assertEqual(normalized.getpixel((4, 0)), (0, 255, 0))
+        self.assertEqual(normalized.getpixel((1, 5)), (0, 0, 255))
+        self.assertEqual(normalized.getpixel((4, 5)), (255, 255, 0))
+
     def test_square_pair_stacks_on_portrait_canvas(self):
         images = [
             Image.new("RGB", (1000, 1000)),
@@ -404,7 +448,7 @@ class ComposeImageTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for option in ("--background", "--style", "--format", "--fit", "--max-images"):
+        for option in ("--background", "--style", "--format", "--fit", "--backend", "--max-images"):
             self.assertIn(option, result.stdout)
 
     def test_edit_link_forwards_composer_options(self):
@@ -418,6 +462,7 @@ class ComposeImageTests(unittest.TestCase):
             max_images=7,
             output_format="1:1",
             background=self.work / "background.jpg",
+            backend="gpu",
         )
 
         command = edit_link_module.build_composer_command(
@@ -432,6 +477,8 @@ class ComposeImageTests(unittest.TestCase):
         self.assertIn("1:1", command)
         self.assertIn("--fit", command)
         self.assertIn("contain", command)
+        self.assertIn("--backend", command)
+        self.assertIn("gpu", command)
 
     def test_relative_preset_is_resolved_from_repository_root(self):
         output = self.work / "relative-preset.png"

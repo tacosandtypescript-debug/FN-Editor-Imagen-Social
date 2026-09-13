@@ -36,6 +36,13 @@ from runtime_config import (
     MAX_CANVAS_PIXELS,
     MAX_SOURCE_PIXELS,
 )
+from render_backend import (
+    BackendUnavailable,
+    make_background as make_gpu_background,
+    resolve_backend,
+    resize_image,
+    should_use_gpu_background,
+)
 
 SEG = re.compile(r"\{([^{}|]+)\|([0-9A-Fa-f]{6})\}")
 
@@ -89,13 +96,15 @@ def aspect_bucket(size):
 
 def adaptive_layout(
     images, canvas_width, content_width, max_height, gap,
-    stack_square_pair=False,
+    stack_square_pair=False, equal_pair_cells=False,
 ):
     """Create justified rows whose cells follow each image's orientation.
 
     The order of the source images is preserved. Each row is laid out like a
     contact sheet: horizontal images get 16:9 cells, square images 1:1 cells,
     and vertical images 9:16 cells. Rows are scaled together if needed.
+    ``equal_pair_cells`` is used by the square preset when a two-image card
+    must use two equal 1:1 panels; ``contain`` then preserves mixed sources.
     """
     max_height = max(float(max_height), 1.0)
     gap = max(float(gap), 0.0)
@@ -103,6 +112,15 @@ def adaptive_layout(
     for index, image in enumerate(images):
         bucket, aspect = aspect_bucket(image.size)
         items.append({"index": index, "bucket": bucket, "aspect": aspect})
+
+    if equal_pair_cells and len(images) == 2:
+        cell = max(1.0, min(max_height, (content_width - gap) / 2))
+        total_width = 2 * cell + gap
+        start_x = (canvas_width - total_width) / 2
+        return [
+            (start_x, 0.0, cell, cell),
+            (start_x + cell + gap, 0.0, cell, cell),
+        ], cell
 
     average_aspect = sum(item["aspect"] for item in items) / len(items)
     target_height = math.sqrt(
@@ -304,6 +322,9 @@ def validate_config(cfg):
             raise ValueError("watermark.side_mode debe ser auto, side o lateral")
         if "side" in watermark and watermark["side"] not in {"auto", "left", "right"}:
             raise ValueError("watermark.side debe ser auto, left o right")
+
+    if "equal_pair_cells" in cfg and not isinstance(cfg["equal_pair_cells"], bool):
+        raise ValueError("equal_pair_cells debe ser booleano")
 
     palette = cfg.get("palette")
     if palette is not None and not isinstance(palette, Mapping):
@@ -575,7 +596,9 @@ def place_shadow(bg, mask, x, y, blur, off_x, off_y, opacity):
     sh.putalpha(alpha)
     bg.alpha_composite(sh, (int(x + off_x - pad), int(y + off_y - pad)))
 
-def make_bg(src, cfg):
+def make_bg(src, cfg, backend="cpu"):
+    if backend == "gpu" and should_use_gpu_background(cfg):
+        return make_gpu_background(src, cfg, backend)
     W, H = cfg["canvas"]["width"], cfg["canvas"]["height"]
     iw, ih = src.size
     scale = max(W / iw, H / ih)
@@ -587,7 +610,34 @@ def make_bg(src, cfg):
     bg = ImageEnhance.Brightness(bg).enhance(cfg.get("background_dim", 0.92)).convert("RGBA")
     return bg
 
-def place_image(bg, img, x, y, w, h, cfg, fit="cover"):
+def equal_square_source(image, cfg, backend="cpu"):
+    """Create a square panel source without cropping its foreground image.
+
+    The enlarged/cropped copy is only a blurred panel background. The original
+    image is pasted at its native aspect ratio on top, so every source corner
+    remains available when the panel is later rendered with ``contain``.
+    """
+    side = max(image.size)
+    iw, ih = image.size
+    scale = max(side / iw, side / ih)
+    bg = resize_image(
+        image,
+        (max(1, round(iw * scale)), max(1, round(ih * scale))),
+        backend,
+    )
+    left = (bg.width - side) // 2
+    top = (bg.height - side) // 2
+    bg = bg.crop((left, top, left + side, top + side))
+    blur = max(0.0, float(cfg.get("background_blur", 16)))
+    if blur:
+        bg = bg.filter(ImageFilter.GaussianBlur(blur))
+    bg = ImageEnhance.Brightness(bg).enhance(float(cfg.get("background_dim", 0.92)))
+    panel = bg.convert("RGB")
+    panel.paste(image, ((side - iw) // 2, (side - ih) // 2))
+    return panel
+
+
+def place_image(bg, img, x, y, w, h, cfg, fit="cover", backend="cpu"):
     """Coloca una imagen en la celda (x,y,w,h). fit='cover' rellena la celda
     recortando centrado (nunca deforma); fit='contain' deja la imagen entera
     centrada (comportamiento de tarjeta simple/grid)."""
@@ -595,14 +645,14 @@ def place_image(bg, img, x, y, w, h, cfg, fit="cover"):
     if fit == "cover":
         s = max(w / img.width, h / img.height)
         tw, th = max(1, round(img.width * s)), max(1, round(img.height * s))
-        img2 = img.resize((tw, th), Image.Resampling.LANCZOS)
+        img2 = resize_image(img, (tw, th), backend)
         # recorte centrado
         l = (tw - w) // 2; t = (th - h) // 2
         img2 = img2.crop((l, t, l + w, t + h))
     else:
         s = min(w / img.width, h / img.height)
         tw, th = max(1, round(img.width * s)), max(1, round(img.height * s))
-        img2 = img.resize((tw, th), Image.Resampling.LANCZOS)
+        img2 = resize_image(img, (tw, th), backend)
     radius = min(cfg.get("corner_radius", 18), img2.width // 2, img2.height // 2)
     img2, mask = rounded(img2, radius)
     px = x + (w - img2.width) // 2
@@ -694,7 +744,15 @@ def main():
         "--fit", choices=("auto", "cover", "contain"), default="auto",
         help="recorte por celda: auto usa contain para una imagen y cover para collages",
     )
+    ap.add_argument(
+        "--backend", choices=("auto", "cpu", "gpu"), default="auto",
+        help="backend de renderizado: auto usa CUDA si está disponible (defecto: auto)",
+    )
     a = ap.parse_args()
+    try:
+        backend = resolve_backend(a.backend)
+    except (BackendUnavailable, ValueError) as exc:
+        ap.error(str(exc))
     if len(a.inputs) < 2:
         ap.error("hace falta al menos una imagen de entrada y una salida")
     *src_paths, out_path = a.inputs
@@ -727,19 +785,33 @@ def main():
         srcs = [load_image(p) for p in src_paths]
     except ValueError as exc:
         ap.error(str(exc))
+    equal_pair_cells_active = (
+        style == "adaptive"
+        and bool(cfg.get("equal_pair_cells", False))
+        and N == 2
+        and W == H
+    )
+    layout_srcs = (
+        [equal_square_source(src, cfg, backend) for src in srcs]
+        if equal_pair_cells_active
+        else srcs
+    )
     ratio = srcs[0].width / srcs[0].height
     if N > 1 and len({src.size for src in srcs}) > 1:
-        print(
-            "AVISO: las imagenes no tienen el mismo tamano; se ajustaran a su orientacion",
-            file=sys.stderr,
-            flush=True,
+        warning = (
+            "AVISO: las imagenes no tienen el mismo tamano; "
+            "se normalizaran en paneles cuadrados iguales"
+            if equal_pair_cells_active
+            else "AVISO: las imagenes no tienen el mismo tamano; "
+            "se ajustaran a su orientacion"
         )
+        print(warning, file=sys.stderr, flush=True)
 
     try:
         bg_src = load_image(a.background, "el fondo") if a.background else srcs[0]
     except ValueError as exc:
         ap.error(str(exc))
-    bg = make_bg(bg_src, cfg)
+    bg = make_bg(bg_src, cfg, backend)
     probe = ImageDraw.Draw(bg)
     gap = cfg.get("gap", 32)
     g = cfg.get("grid_gap", 24)
@@ -861,12 +933,13 @@ def main():
         target_h = min(usable, target_cap) if target_cap else usable
         target_h = max(1, target_h)
         cells, collage_h = adaptive_layout(
-            srcs,
+            layout_srcs,
             W,
             content_w,
             target_h,
             g,
             stack_square_pair=stack_square_pair,
+            equal_pair_cells=equal_pair_cells_active,
         )
         fit = "cover" if a.fit == "auto" else a.fit
     else:
@@ -896,8 +969,8 @@ def main():
     if ty < safe_top or by + bot_h > safe_bottom:
         ap.error("el contenido excede los márgenes seguros; reduce o divide el texto")
 
-    for (x, y, w, h), src in zip(cells, srcs):
-        place_image(bg, src, x, y + cy, w, h, cfg, fit=fit)
+    for (x, y, w, h), src in zip(cells, layout_srcs):
+        place_image(bg, src, x, y + cy, w, h, cfg, fit=fit, backend=backend)
 
     yy = ty
     for part in top_parts:
@@ -921,6 +994,7 @@ def main():
     print(json.dumps({
         "output": str(out), "width": W, "height": H,
         "images": N, "ratio": round(ratio, 3), "style": style,
+        "backend": backend,
         "orientations": [aspect_bucket(src.size)[0] for src in srcs],
         "top": {"y": ty, "font_size": top_size}, "bottom": {"y": by, "font_size": bot_size},
     }, ensure_ascii=False))
