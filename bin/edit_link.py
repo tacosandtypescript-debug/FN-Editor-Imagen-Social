@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from PIL import Image
+
 from compose_image import STYLES, positive_int
 from fetch_media import download_link_info
 from runtime_config import DEFAULT_MAX_IMAGES
@@ -16,6 +18,42 @@ from runtime_config import DEFAULT_MAX_IMAGES
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSER = ROOT / "bin" / "compose_image.py"
 DEFAULT_PRESET = ROOT / "bin" / "preset.json"
+
+
+def validate_rendered_output(path, compose_metadata):
+    """Validate the file produced by the compositor before returning success."""
+    expected_by_suffix = {
+        ".png": ("PNG", "RGBA"),
+        ".jpg": ("JPEG", "RGB"),
+        ".jpeg": ("JPEG", "RGB"),
+    }
+    expected = expected_by_suffix.get(path.suffix.lower())
+    if expected is None:
+        raise ValueError("la salida debe tener extension .png, .jpg o .jpeg")
+    try:
+        with Image.open(path) as image:
+            image.load()
+            actual = {
+                "format": str(image.format or "").upper(),
+                "mode": image.mode,
+                "width": image.width,
+                "height": image.height,
+            }
+    except OSError as exc:
+        raise ValueError(f"no se pudo validar la salida generada: {exc}") from exc
+
+    mismatches = []
+    if actual["format"] != expected[0]:
+        mismatches.append(f"formato {actual['format']} (esperado {expected[0]})")
+    if actual["mode"] != expected[1]:
+        mismatches.append(f"modo {actual['mode']} (esperado {expected[1]})")
+    for key in ("width", "height"):
+        expected_value = compose_metadata.get(key)
+        if actual[key] != expected_value:
+            mismatches.append(f"{key} {actual[key]} (esperado {expected_value})")
+    if mismatches:
+        raise ValueError("validacion de salida fallida: " + "; ".join(mismatches))
+    return actual
 
 
 def build_composer_command(args, input_paths):
@@ -83,14 +121,24 @@ def main():
             parser.error(str(exc))
         input_paths = [item["path"] for item in link_info["images"]]
         command = build_composer_command(args, input_paths)
-        completed = subprocess.run(command, check=False)
+        completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, text=True)
         if completed.returncode == 0:
-            print(json.dumps({
+            try:
+                compose_metadata = json.loads(completed.stdout.strip().splitlines()[-1])
+                if not isinstance(compose_metadata, dict):
+                    raise ValueError("el compositor no devolvio metadatos validos")
+                verification = validate_rendered_output(args.output, compose_metadata)
+            except (IndexError, json.JSONDecodeError, ValueError) as exc:
+                parser.error(str(exc))
+            summary = {
+                **compose_metadata,
                 "output": str(args.output),
                 "source_type": link_info["source_type"],
                 "post_text": link_info["post_text"],
                 "count": len(input_paths),
-            }, ensure_ascii=False))
+                "verification": {**verification, "ok": True},
+            }
+            print(json.dumps(summary, ensure_ascii=False))
         raise SystemExit(completed.returncode)
 
 

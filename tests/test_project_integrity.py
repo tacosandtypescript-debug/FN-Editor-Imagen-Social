@@ -280,10 +280,13 @@ class ProjectIntegrityTests(unittest.TestCase):
                 server.server_close()
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            summary = json.loads(result.stdout.strip().splitlines()[-1])
+            output_lines = [line for line in result.stdout.splitlines() if line.strip()]
+            self.assertEqual(len(output_lines), 1)
+            summary = json.loads(output_lines[0])
             self.assertEqual(summary["source_type"], "direct-image")
             self.assertEqual(summary["count"], 1)
             self.assertIsNone(summary["post_text"])
+            self.assertTrue(summary["verification"]["ok"])
             self.assertTrue(output.is_file())
             with Image.open(output) as image:
                 self.assertEqual((image.width, image.height), (1080, 1920))

@@ -29,7 +29,7 @@ justos). Usa --fit contain para conservar la imagen completa en cada celda.
 import argparse, json, math, re, sys
 from collections.abc import Mapping
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageStat
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps, ImageStat
 from runtime_config import (
     DEFAULT_MAX_IMAGES,
     MAX_CANVAS_EDGE,
@@ -421,7 +421,7 @@ def load_image(path, label="imagen"):
                 raise ValueError(
                     f"supera el maximo de {MAX_SOURCE_PIXELS:,} pixeles"
                 )
-            return opened.convert("RGB")
+            return ImageOps.exif_transpose(opened).convert("RGB")
     except (OSError, ValueError) as exc:
         raise ValueError(f"{label} '{path}' no es valida: {exc}") from exc
 

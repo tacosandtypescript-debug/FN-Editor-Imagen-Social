@@ -98,6 +98,17 @@ class ComposeImageTests(unittest.TestCase):
             self.assertEqual((image.width, image.height, image.format), (1080, 1920, "JPEG"))
             self.assertEqual(image.mode, "RGB")
 
+    def test_load_image_applies_exif_orientation(self):
+        source = self.work / "oriented.jpg"
+        image = Image.new("RGB", (20, 30), (20, 40, 80))
+        exif = image.getexif()
+        exif[274] = 6  # Rotate 90 degrees clockwise when displayed.
+        image.save(source, exif=exif.tobytes())
+
+        loaded = COMPOSER_MODULE.load_image(source)
+
+        self.assertEqual(loaded.size, (30, 20))
+
     def test_square_skill_wrapper_matches_canonical_compositor(self):
         square_inputs = []
         for index in range(2):
@@ -581,6 +592,35 @@ class ComposeImageTests(unittest.TestCase):
         self.assertEqual(info["post_text"], "El evento llega esta semana")
         self.assertEqual(len(info["images"]), 1)
         self.assertTrue(Path(info["images"][0]["path"]).is_file())
+
+    def test_fetch_post_data_tries_second_mirror_for_missing_text(self):
+        first_payload = {
+            "tweet": {"mediaURLs": ["https://cdn.example/event.jpg"]},
+        }
+        second_payload = {
+            "tweet": {
+                "text": "El evento llega esta semana",
+                "mediaURLs": ["https://cdn.example/event.jpg"],
+            },
+        }
+
+        def fake_request(url, *args, **kwargs):
+            if url == "https://api.vxtwitter.com/example/status/123456":
+                return json.dumps(first_payload).encode("utf-8")
+            if url == "https://api.fxtwitter.com/example/status/123456":
+                return json.dumps(second_payload).encode("utf-8")
+            if url == "https://cdn.example/event.jpg":
+                return image_bytes("JPEG")
+            raise AssertionError(f"URL inesperada: {url}")
+
+        with patch("fetch_media.request_bytes", side_effect=fake_request):
+            info = download_link_info(
+                "https://x.com/example/status/123456",
+                self.work / "mirror-fallback",
+            )
+
+        self.assertEqual(info["post_text"], "El evento llega esta semana")
+        self.assertEqual(info["images"][0]["url"], "https://cdn.example/event.jpg")
 
 
 if __name__ == "__main__":

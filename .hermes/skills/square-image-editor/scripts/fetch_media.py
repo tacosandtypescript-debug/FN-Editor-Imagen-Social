@@ -157,20 +157,28 @@ def extract_post_text(payload):
 def fetch_post_data(username, status_id):
     """Fetch ordered media and visible text, trying both public X mirrors."""
     errors = []
+    media_without_text = None
     for api_host in ("api.vxtwitter.com", "api.fxtwitter.com"):
         api_url = f"https://{api_host}/{username}/status/{status_id}"
         try:
             payload = json.loads(request_bytes(api_url, accept="application/json").decode("utf-8"))
             urls = extract_media_urls(payload)
             if urls:
-                return {
+                data = {
                     "media_urls": urls,
                     "post_text": extract_post_text(payload),
                     "api_host": api_host,
                 }
+                if data["post_text"]:
+                    return data
+                if media_without_text is None:
+                    media_without_text = data
+                continue
             errors.append(f"{api_host}: no devolvió imágenes")
         except (HTTPError, URLError, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"{api_host}: {exc}")
+    if media_without_text:
+        return media_without_text
     raise RuntimeError("no se pudieron obtener los medios del post (" + "; ".join(errors) + ")")
 
 
@@ -216,7 +224,7 @@ def inspect_image(raw):
 
 
 def download_images(urls, output_dir):
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
     for index, url in enumerate(urls, 1):
