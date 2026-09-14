@@ -93,8 +93,10 @@ python3 bin/compose_image.py img1.jpg img2.jpg img3.jpg salida.png \
 ```
 
 `--format` acepta proporciones como `1:1`, `4:5`, `16:9` y `9:16` (también
-`W:H`, `W x H` o `W/H`). La salida PNG conserva el tamaño equivalente a 1080
-px en el lado corto y se guarda sin compresión PNG.
+`W:H`, `W x H` o `W/H`). Por defecto la CLI conserva el tamaño equivalente a
+1080 px en el lado corto y se guarda sin compresión PNG. `--resolution 4k`
+genera 2160 px en el lado corto: `2160×3840` en vertical y `2160×2160` en
+cuadrado, escalando también tipografía, márgenes, sombras y safe areas.
 
 El compositor limita por defecto el lote a 24 imágenes; se puede cambiar con
 `--max-images`. Las dimensiones del preset y de la salida se validan antes de
@@ -133,8 +135,8 @@ Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
 `bin/edit_link.py`.
 
 `bin/edit_link.py` acepta las mismas opciones de composición (`--background`,
-`--style`, `--format`, `--fit` y `--max-images`) y las valida con el compositor
-canónico.
+`--style`, `--format`, `--fit`, `--resolution` y `--max-images`) y las valida
+con el compositor canónico.
 
 Para varios enlaces enviados juntos, usa `prepare_batch.py` y compón una sola
 tarjeta con todos los paths del manifiesto. El titular y la fecha son comunes a
@@ -162,6 +164,12 @@ hermes skills list
 Si Hermes ya tenía una sesión abierta, usa `/reset` o inicia una sesión nueva
 para reconstruir el índice. El CLI puede mostrar estas skills como `local`; en
 el prompt del agente las skills de proyecto se etiquetan como `[project]`.
+
+Las skills de Hermes exportan a 4K por defecto (`2160×3840` vertical o
+`2160×2160` cuadrado) y la imagen final debe entregarse como documento/archivo
+PNG original; en Telegram equivale a `sendDocument`, nunca `sendPhoto`. Para
+volver a la resolución anterior se puede pasar explícitamente
+`--resolution native`.
 
 Para instalar solo la skill principal desde este repositorio usa la URL directa
 de su `SKILL.md`, no la URL de la carpeta de GitHub:

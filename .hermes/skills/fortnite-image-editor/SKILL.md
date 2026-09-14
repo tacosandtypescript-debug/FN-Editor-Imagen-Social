@@ -21,9 +21,9 @@ no responder solo con un resumen ni detenerse tras descargar los medios.
 
 | Pedido de Isaac | Modo | Preset | Salida |
 |---|---|---|---|
-| `cuadrada`, `1:1`, `feed`, `post cuadrado` | square | `references/presets/fortnite_square_image.json` | 1080×1080 PNG |
-| `vertical`, `9:16`, `story`, `historia` | vertical | `references/presets/fortnite_vertical_image.json` | 1080×1920 PNG |
-| Sin formato explícito | vertical | vertical | 1080×1920 PNG |
+| `cuadrada`, `1:1`, `feed`, `post cuadrado` | square | `references/presets/fortnite_square_image.json` | 2160×2160 PNG |
+| `vertical`, `9:16`, `story`, `historia` | vertical | `references/presets/fortnite_vertical_image.json` | 2160×3840 PNG |
+| Sin formato explícito | vertical | vertical | 2160×3840 PNG |
 
 No cargar los dos modos para una misma tarjeta. Si Isaac pide varios formatos,
 crear una salida independiente por formato.
@@ -50,10 +50,11 @@ crear una salida independiente por formato.
    para un lote; 3–7 para una sola fuente) y una línea de contexto con la fecha,
    basados solo en los posts. Si no se puede leer una fuente, avisar; no
    inventar la noticia.
-5. Ejecutar `verify_image.py` con formato PNG, modo RGBA y dimensiones del modo.
-6. Entregar inmediatamente la tarjeta final como documento/archivo original
-   cuando el canal lo permita. No entregar una previsualización comprimida como
-   sustituto del PNG.
+5. Ejecutar `verify_image.py` con formato PNG, modo RGBA y dimensiones 4K del
+   modo: `2160×3840` vertical o `2160×2160` cuadrado.
+6. Entregar inmediatamente la tarjeta PNG 4K como documento/archivo original
+   cuando el canal lo permita. En Telegram usar `sendDocument` (archivo), no
+   `sendPhoto` (foto) ni una previsualización comprimida.
 
 `SKILL_DIR` significa la ruta absoluta de la carpeta que contiene este
 `SKILL.md`. Los scripts y presets de esta skill son autocontenidos; no uses los
@@ -68,29 +69,29 @@ Windows; `python3` normalmente en Linux/macOS).
 
 ```text
 # Opción A: el agente ya obtuvo el texto del post con sus herramientas.
-python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 
 # Opción B: obtener texto + medios desde el paquete y componer con los paths del JSON.
 python "<SKILL_DIR>/scripts/prepare_link.py" "<URL>" "<WORK_DIR>" --max-images 24
-python "<SKILL_DIR>/scripts/compose_image.py" "<MEDIA_01>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/compose_image.py" "<MEDIA_01>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 ```
 
 Para varios enlaces en un solo carrusel:
 
 ```text
 python "<SKILL_DIR>/scripts/prepare_batch.py" "<WORK_DIR>" "<URL_1>" "<URL_2>" --max-images 24
-python "<SKILL_DIR>/scripts/compose_image.py" "<TODOS_LOS_PATHS_DEL_JSON>" "<OUTPUT>.png" --top "<TITULAR_GENERAL>" --bottom "<CONTEXTO Y FECHA>" --format 9:16 --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/compose_image.py" "<TODOS_LOS_PATHS_DEL_JSON>" "<OUTPUT>.png" --top "<TITULAR_GENERAL>" --bottom "<CONTEXTO Y FECHA>" --format 9:16 --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 ```
 
 ### Cuadrada 1:1
 
 ```text
-python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 1:1 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_square_image.json"
+python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 1:1 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_square_image.json"
 ```
 
 Para varios enlaces en un carrusel cuadrado, usar `prepare_batch.py` y una
-sola llamada a `compose_image.py` con todos los paths del JSON, `--fit contain`
-y el preset cuadrado.
+sola llamada a `compose_image.py` con todos los paths del JSON, `--resolution 4k`,
+`--fit contain` y el preset cuadrado.
 
 Para archivos locales, sustituir `edit_link.py` por
 `compose_image.py` y pasar una o más imágenes antes de la salida.
@@ -98,7 +99,7 @@ Para archivos locales, sustituir `edit_link.py` por
 ### Verificación
 
 ```text
-python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode RGBA --width <1080> --height <1920-or-1080>
+python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode RGBA --width <2160> --height <3840-or-2160>
 ```
 
 ## Reglas visuales

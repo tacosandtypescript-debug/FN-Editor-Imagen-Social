@@ -1,6 +1,6 @@
 ---
 name: vertical-image-editor
-description: "Usar obligatoriamente para editar una noticia o imagen de Fortnite desde un enlace de X/Twitter o archivos adjuntos cuando el resultado sea vertical, 9:16, story, historia o 1080x1920. Descarga todos los medios, compone y valida un PNG."
+description: "Usar obligatoriamente para editar una noticia o imagen de Fortnite desde un enlace de X/Twitter o archivos adjuntos cuando el resultado sea vertical, 9:16, story, historia o 2160x3840 4K. Descarga todos los medios, compone y valida un PNG."
 version: 3.1.0
 author: Isaac
 license: MIT
@@ -34,8 +34,8 @@ descarga no es el final del trabajo.
    para un lote. Mantener el orden y usar como máximo 24 imágenes; en lotes
    usar `--fit contain` para evitar zoom y recortes de capturas.
 4. Ejecutar `verify_image.py`.
-5. Entregar el PNG original como documento cuando el canal lo permita; no usar
-   una foto comprimida como sustituto.
+5. Entregar el PNG 4K original como documento; en Telegram usar `sendDocument`,
+   no `sendPhoto` ni una previsualización comprimida.
 
 Para un lote, el comando de descarga es:
 
@@ -51,8 +51,8 @@ que el texto superior e inferior siempre aparezca.
 `bin/` ni de `barlow_font/` de la raíz.
 
 ```text
-python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
-python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode RGBA --width 1080 --height 1920
+python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode RGBA --width 2160 --height 3840
 ```
 
 Para imágenes locales, usar `scripts/compose_image.py` en lugar de
@@ -60,7 +60,7 @@ Para imágenes locales, usar `scripts/compose_image.py` en lugar de
 
 ## Reglas visuales
 
-- Salida 1080×1920, fondo blur cover y sujeto sin deformar.
+- Salida 4K 2160×3840, fondo blur cover y sujeto sin deformar.
 - Barlow Black Italic, texto centrado, márgenes seguros y máximo dos colores de
   acento.
 - Mantener `CÓDIGO: KHETZALGG` como marca de agua, sin créditos ni autores.

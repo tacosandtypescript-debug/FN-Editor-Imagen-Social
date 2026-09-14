@@ -362,7 +362,7 @@ def _resolve_preset_path(preset_path):
     return candidates[0]
 
 
-def format_dimensions(value, default=(1080, 1920)):
+def format_dimensions(value, default=(1080, 1920), short_edge=1080):
     """Resolve a ratio such as 1:1, 4:5, 16:9 or 9:16 to pixels."""
     if not value:
         dimensions = (int(default[0]), int(default[1]))
@@ -374,13 +374,54 @@ def format_dimensions(value, default=(1080, 1920)):
     aspect_w, aspect_h = int(match.group(1)), int(match.group(2))
     if aspect_w <= 0 or aspect_h <= 0:
         raise ValueError("la proporcion debe tener valores positivos")
-    short_edge = 1080
+    short_edge = int(short_edge)
+    if short_edge <= 0:
+        raise ValueError("el lado corto debe ser positivo")
     if aspect_w >= aspect_h:
         dimensions = (round(short_edge * aspect_w / aspect_h), short_edge)
     else:
         dimensions = (short_edge, round(short_edge * aspect_h / aspect_w))
     _validate_canvas_dimensions(*dimensions, "la salida")
     return dimensions
+
+
+RESOLUTION_SCALES = {"native": 1, "4k": 2}
+PIXEL_CONFIG_KEYS = {
+    "gap", "font_size", "min_font_size", "max_text_width", "text_margin",
+    "outline_width", "foreground_max_width", "foreground_max_height",
+    "corner_radius", "grid_gap", "grid_padding", "outer_margin", "line_gap",
+    "watermark_gap", "layout_shift_y", "background_blur",
+}
+
+
+def scale_config_for_resolution(cfg, resolution):
+    """Scale canvas geometry and typography without changing colors/opacities."""
+    try:
+        scale = RESOLUTION_SCALES[resolution]
+    except KeyError as exc:
+        raise ValueError("la resolución debe ser native o 4k") from exc
+    if scale == 1:
+        return scale
+
+    canvas = cfg["canvas"]
+    canvas["width"] = round(canvas["width"] * scale)
+    canvas["height"] = round(canvas["height"] * scale)
+    for key in PIXEL_CONFIG_KEYS:
+        value = cfg.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            cfg[key] = round(value * scale)
+    for section_name in ("watermark", "text_shadow", "shadow"):
+        section = cfg.get(section_name)
+        if not isinstance(section, Mapping):
+            continue
+        for key in ("size", "bottom_margin", "side_gap", "blur"):
+            value = section.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                section[key] = round(value * scale)
+        offset = section.get("offset")
+        if isinstance(offset, (list, tuple)) and len(offset) == 2:
+            section["offset"] = [round(item * scale) for item in offset]
+    return scale
 
 
 def positive_int(value):
@@ -773,6 +814,10 @@ def main():
         "--backend", choices=("auto", "cpu", "gpu"), default="auto",
         help="backend de renderizado: auto usa CUDA si está disponible (defecto: auto)",
     )
+    ap.add_argument(
+        "--resolution", choices=tuple(RESOLUTION_SCALES), default="4k",
+        help="resolución de exportación: native o 4k (2160 px de lado corto)",
+    )
     a = ap.parse_args()
     try:
         validate_text_markup(a.top, a.bottom)
@@ -802,9 +847,14 @@ def main():
     except ValueError as exc:
         ap.error(str(exc))
     try:
+        resolution_scale = scale_config_for_resolution(cfg, a.resolution)
+    except ValueError as exc:
+        ap.error(str(exc))
+    try:
         W, H = format_dimensions(
             a.output_format,
             (cfg["canvas"]["width"], cfg["canvas"]["height"]),
+            short_edge=min(cfg["canvas"]["width"], cfg["canvas"]["height"]),
         )
     except ValueError as exc:
         ap.error(str(exc))
@@ -1024,6 +1074,8 @@ def main():
         "output": str(out), "width": W, "height": H,
         "images": N, "ratio": round(ratio, 3), "style": style,
         "backend": backend,
+        "resolution": a.resolution,
+        "resolution_scale": resolution_scale,
         "orientations": [aspect_bucket(src.size)[0] for src in srcs],
         "top": {"y": ty, "font_size": top_size}, "bottom": {"y": by, "font_size": bot_size},
     }, ensure_ascii=False))

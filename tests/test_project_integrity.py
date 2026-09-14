@@ -202,8 +202,11 @@ class ProjectIntegrityTests(unittest.TestCase):
                 )
                 for script_name in required_scripts:
                     self.assertTrue((skill_dir / "scripts" / script_name).is_file())
+                composer_text = (skill_dir / "scripts" / "compose_image.py").read_text(encoding="utf-8")
+                self.assertIn('choices=tuple(RESOLUTION_SCALES), default="4k"', composer_text)
                 link_script = (skill_dir / "scripts" / "edit_link.py").read_text(encoding="utf-8")
                 self.assertIn("SKILL_ROOT = Path(__file__).resolve().parents[1]", link_script)
+                self.assertIn('choices=("native", "4k"), default="4k"', link_script)
                 self.assertNotIn('ROOT / "bin"', link_script)
 
                 with tempfile.TemporaryDirectory() as temporary:
@@ -221,6 +224,8 @@ class ProjectIntegrityTests(unittest.TestCase):
                             "TITULAR",
                             "--bottom",
                             "CONTEXTO",
+                            "--resolution",
+                            "native",
                             "--preset",
                             str(preset),
                         ],
@@ -270,6 +275,8 @@ class ProjectIntegrityTests(unittest.TestCase):
                         "TITULAR",
                         "--bottom",
                         "CONTEXTO",
+                        "--resolution",
+                        "native",
                         "--backend",
                         "cpu",
                     ],

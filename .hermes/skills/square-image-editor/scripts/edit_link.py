@@ -75,6 +75,8 @@ def build_composer_command(args, input_paths):
         args.fit,
         "--backend",
         getattr(args, "backend", "auto"),
+        "--resolution",
+        getattr(args, "resolution", "4k"),
         "--max-images",
         str(args.max_images),
     ]
@@ -107,6 +109,10 @@ def main():
     parser.add_argument(
         "--backend", choices=("auto", "cpu", "gpu"), default="auto",
         help="backend de píxeles: auto detecta CUDA y conserva CPU como fallback",
+    )
+    parser.add_argument(
+        "--resolution", choices=("native", "4k"), default="4k",
+        help="resolución de exportación: native o 4k (2160 px de lado corto)",
     )
     parser.add_argument(
         "--max-images", type=positive_int, default=DEFAULT_MAX_IMAGES,

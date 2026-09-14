@@ -110,6 +110,23 @@ class ComposeImageTests(unittest.TestCase):
 
         self.assertEqual(loaded.size, (30, 20))
 
+    def test_4k_resolution_scales_canvas_and_layout(self):
+        output = self.work / "4k.png"
+        metadata = self.run_composer(
+            COMPOSER,
+            output,
+            "--resolution",
+            "4k",
+            "--backend",
+            "cpu",
+        )
+
+        self.assertEqual((metadata["width"], metadata["height"]), (2160, 3840))
+        self.assertEqual(metadata["resolution"], "4k")
+        self.assertEqual(metadata["resolution_scale"], 2)
+        with Image.open(output) as image:
+            self.assertEqual((image.width, image.height, image.mode), (2160, 3840, "RGBA"))
+
     def test_text_markup_rejects_empty_text_stopwords_and_excess_colors(self):
         with self.assertRaisesRegex(ValueError, "superior.*vacío"):
             COMPOSER_MODULE.validate_text_markup("   ", "CONTEXTO")
@@ -503,7 +520,7 @@ class ComposeImageTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for option in ("--background", "--style", "--format", "--fit", "--backend", "--max-images"):
+        for option in ("--background", "--style", "--format", "--fit", "--backend", "--resolution", "--max-images"):
             self.assertIn(option, result.stdout)
 
     def test_edit_link_forwards_composer_options(self):
@@ -534,6 +551,8 @@ class ComposeImageTests(unittest.TestCase):
         self.assertIn("contain", command)
         self.assertIn("--backend", command)
         self.assertIn("gpu", command)
+        self.assertIn("--resolution", command)
+        self.assertIn("native", command)
 
     def test_relative_preset_is_resolved_from_repository_root(self):
         output = self.work / "relative-preset.png"
