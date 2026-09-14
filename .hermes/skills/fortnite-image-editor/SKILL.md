@@ -17,6 +17,22 @@ Esta es la skill de entrada para cualquier petición de edición de imágenes.
 Cuando Isaac pega un enlace y pide editarlo, el enlace es una orden de trabajo:
 no responder solo con un resumen ni detenerse tras descargar los medios.
 
+## Comando `/imagen`
+
+El comando explícito de entrada es:
+
+```text
+/imagen <enlace-1> [enlace-2] [enlace-3] ...
+```
+
+Al recibirlo, activar esta skill y completar todo el flujo. El primer enlace es
+obligatorio; los siguientes son opcionales y pueden ir separados por espacios
+o saltos de línea. Los corchetes son marcadores y no se escriben literalmente.
+Sin una indicación adicional, usar vertical 9:16 en 4K. `cuadrada` o `1:1` en
+el mensaje selecciona el modo cuadrado. No pedir al usuario que elija entre
+“carrusel global” o “tarjetas individuales”: la regla por defecto es una
+tarjeta/documento por enlace.
+
 ## Decidir el formato
 
 | Pedido de Isaac | Modo | Preset | Salida |

@@ -163,6 +163,18 @@ hermes skills trust
 hermes skills list
 ```
 
+El comando de uso es `/imagen <enlace-1> [enlace-2] ...`. Por ejemplo:
+
+```text
+/imagen https://x.com/cuenta/status/123
+/imagen https://x.com/cuenta/status/123 https://x.com/cuenta/status/456
+```
+
+Cada enlace produce un documento independiente. Si un enlace contiene varias
+imágenes, todas permanecen juntas en el documento de esa publicación. El modo
+predeterminado es vertical 9:16 en 4K; añade `cuadrada` o `1:1` para usar el
+formato cuadrado.
+
 Si Hermes ya tenía una sesión abierta, usa `/reset` o inicia una sesión nueva
 para reconstruir el índice. El CLI puede mostrar estas skills como `local`; en
 el prompt del agente las skills de proyecto se etiquetan como `[project]`.
