@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Download several X/image links as one ordered editorial batch.
+"""Download several X/image links as an ordered set of publications.
 
 Each source gets its own directory so files never overwrite one another. The
-JSON keeps both the per-source grouping and a flattened image order for the
-single carousel composition that Hermes must create.
+JSON keeps each source grouped so Hermes can compose and deliver one card per
+publication. Images inside one source stay together.
 """
 
 import argparse
@@ -26,14 +26,8 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
     sources = []
     images = []
     for source_index, url in enumerate(urls, 1):
-        remaining = max_images - len(images)
-        if remaining <= 0:
-            raise ValueError(
-                f"el lote supera el máximo de {max_images} imágenes; "
-                f"no se pudo procesar el enlace {url}"
-            )
         source_dir = root / f"source-{source_index:02d}"
-        info = download_link_info(url, source_dir, remaining)
+        info = download_link_info(url, source_dir, max_images)
         source_images = []
         for item in info["images"]:
             enriched = {
@@ -53,15 +47,18 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
         })
 
     return {
-        "batch_type": "carousel",
+        "batch_type": "publication-set",
         "source_count": len(sources),
         "sources": sources,
         "images": images,
         "count": len(images),
         "editorial_contract": {
-            "one_general_title": True,
-            "one_shared_context_and_date": True,
-            "caption_hashtag_count": 5,
+            "one_output_per_source": True,
+            "one_title_per_source": True,
+            "one_caption_per_source": True,
+            "separate_documents": True,
+            "media_within_source_stays_together": True,
+            "caption_hashtag_count_per_source": 5,
             "required_brand_hashtag": "#khetzalgg",
         },
     }
@@ -69,7 +66,7 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Descarga varios enlaces y devuelve un manifiesto de un solo carrusel."
+        description="Descarga varios enlaces y devuelve un manifiesto por publicación."
     )
     parser.add_argument("output_dir", type=Path, help="carpeta de trabajo del lote")
     parser.add_argument("urls", nargs="+", help="enlaces X/Twitter o imágenes directas, en orden")

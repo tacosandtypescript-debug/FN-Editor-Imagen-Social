@@ -7,8 +7,8 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 
 - `bin/compose_image.py`: compositor principal Pillow para 1 o más imágenes.
 - `bin/fetch_media.py`: descarga en orden todas las imágenes de un post de X/Twitter.
-- `bin/prepare_batch.py`: descarga varios enlaces como un único lote/carrusel,
-  conservando el texto, los grupos y el orden de cada fuente.
+- `bin/prepare_batch.py`: descarga varios enlaces como un conjunto de
+  publicaciones independientes, conservando el texto, los grupos y el orden.
 - `bin/edit_link.py`: une descarga + composición en un solo comando.
 - `skills/media/vertical-image-editor/scripts/compose_image.py`: entrada
   compatible con la skill que delega en el compositor principal.
@@ -138,10 +138,12 @@ Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
 `--style`, `--format`, `--fit`, `--resolution` y `--max-images`) y las valida
 con el compositor canónico.
 
-Para varios enlaces enviados juntos, usa `prepare_batch.py` y compón una sola
-tarjeta con todos los paths del manifiesto. El titular y la fecha son comunes a
-todo el carrusel; usa `--fit contain` para evitar zoom o recortes de capturas.
-La respuesta/caption debe llevar exactamente cinco hashtags, incluyendo
+Para varios enlaces enviados juntos, usa `prepare_batch.py` y procesa cada
+grupo `sources[i].images` por separado: una publicación produce una tarjeta y
+un documento. Si una publicación trae varias imágenes, permanecen juntas en
+esa tarjeta; nunca se mezclan enlaces diferentes. Usa `--fit contain` para
+evitar zoom o recortes de capturas. Cada respuesta/caption debe llevar
+exactamente cinco hashtags, incluyendo
 `#khetzalgg`; los otros cuatro se eligen consultando las tendencias del día en
 [TikTok Creative Center](https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en)
 y solo si son relevantes para Fortnite.

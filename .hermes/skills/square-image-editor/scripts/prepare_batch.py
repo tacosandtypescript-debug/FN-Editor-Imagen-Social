@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download several links as one ordered editorial batch for Hermes."""
+"""Download several links as an ordered set of publications for Hermes."""
 
 import argparse
 import json
@@ -19,10 +19,7 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
     root.mkdir(parents=True, exist_ok=True)
     sources, images = [], []
     for source_index, url in enumerate(urls, 1):
-        remaining = max_images - len(images)
-        if remaining <= 0:
-            raise ValueError(f"el lote supera el máximo de {max_images} imágenes; no se pudo procesar el enlace {url}")
-        info = download_link_info(url, root / f"source-{source_index:02d}", remaining)
+        info = download_link_info(url, root / f"source-{source_index:02d}", max_images)
         source_images = [{**item, "source_index": source_index, "source_url": url} for item in info["images"]]
         images.extend(source_images)
         sources.append({
@@ -31,17 +28,20 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
             "images": source_images, "count": len(source_images),
         })
     return {
-        "batch_type": "carousel", "source_count": len(sources),
+        "batch_type": "publication-set", "source_count": len(sources),
         "sources": sources, "images": images, "count": len(images),
         "editorial_contract": {
-            "one_general_title": True, "one_shared_context_and_date": True,
-            "caption_hashtag_count": 5, "required_brand_hashtag": "#khetzalgg",
+            "one_output_per_source": True, "one_title_per_source": True,
+            "one_caption_per_source": True, "separate_documents": True,
+            "media_within_source_stays_together": True,
+            "caption_hashtag_count_per_source": 5,
+            "required_brand_hashtag": "#khetzalgg",
         },
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Descarga varios enlaces como un solo carrusel.")
+    parser = argparse.ArgumentParser(description="Descarga varios enlaces como publicaciones separadas.")
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("urls", nargs="+", help="enlaces en el orden del carrusel")
     parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES)

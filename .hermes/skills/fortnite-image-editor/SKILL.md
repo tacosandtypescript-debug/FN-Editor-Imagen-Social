@@ -1,7 +1,7 @@
 ---
 name: fortnite-image-editor
 description: "Skill principal para editar imágenes de noticias Fortnite: activar cuando el usuario pegue un enlace de X/Twitter, una URL directa de imagen o adjunte imágenes. Descarga todos los medios, decide vertical 9:16 o cuadrada 1:1, compone, valida y entrega el PNG."
-version: 3.1.0
+version: 3.2.0
 author: Isaac
 license: MIT
 platforms: [linux, macos, windows]
@@ -37,24 +37,32 @@ crear una salida independiente por formato.
    descargados en orden.
 2. Si Isaac envía varios enlaces en el mismo mensaje, ejecutar
    `scripts/prepare_batch.py` con todos ellos en el orden recibido. El JSON
-   devuelve `sources[].post_text`, la agrupación por enlace y `images` ya
-   ordenadas. Es un solo carrusel: redactar un único titular general que
-   abarque todos los temas y un único contexto/fecha; no generar un título por
-   cada enlace.
-3. Completar la edición en la misma petición: ejecutar el `edit_link.py` de
-   esta skill (si ya se obtuvo el texto con una herramienta) o ejecutar
-   `compose_image.py` sobre los archivos que devolvió `prepare_link.py`. Nunca
-   dejar la tarea en “descarga terminada”. Conserva el límite de 24 medios;
-   para vídeos o GIFs, el descargador usa la miniatura disponible.
-4. Si Isaac no da textos, redactar el titular general en español (3–12 palabras
-   para un lote; 3–7 para una sola fuente) y una línea de contexto con la fecha,
-   basados solo en los posts. Si no se puede leer una fuente, avisar; no
-   inventar la noticia.
-5. Ejecutar `verify_image.py` con formato PNG, modo RGBA y dimensiones 4K del
-   modo: `2160×3840` vertical o `2160×2160` cuadrado.
-6. Entregar inmediatamente la tarjeta PNG 4K como documento/archivo original
-   cuando el canal lo permita. En Telegram usar `sendDocument` (archivo), no
+   devuelve `sources[]` agrupado por publicación. Procesar cada fuente por
+   separado: una publicación produce una salida y un documento; nunca mezclar
+   imágenes de enlaces distintos.
+3. Completar la edición de cada publicación en la misma petición: ejecutar
+   `edit_link.py` para una fuente, o `compose_image.py` una vez con todos los
+   paths de `sources[i].images`. Si una publicación trae 1, 2 o 3 imágenes,
+   esas imágenes permanecen juntas en su única tarjeta. Nunca dejar la tarea en
+   “descarga terminada”. Para vídeos o GIFs, usar la miniatura disponible.
+4. Si Isaac no da textos, redactar un titular en español para cada publicación
+   (3–12 palabras si tiene varias imágenes; 3–7 si tiene una) y una línea de
+   contexto con fecha, basados solo en el post correspondiente. No inventar la
+   noticia.
+5. Ejecutar `verify_image.py` por cada salida, con PNG RGBA y dimensiones 4K
+   del modo: `2160×3840` vertical o `2160×2160` cuadrado.
+6. Entregar las tarjetas PNG 4K como documentos/archivos independientes y en
+   el orden de los enlaces. En Telegram usar `sendDocument` (archivo), no
    `sendPhoto` (foto) ni una previsualización comprimida.
+
+## Comunicación
+
+- Usar un único estado persistente en español para toda la petición, por
+  ejemplo `⏳ Preparando 4 publicaciones…`, `🔄 2/4 listas…` y `✅ 4/4 listas`.
+- Si se puede editar el mensaje, actualizar el mismo estado. No emitir un
+  mensaje nuevo por cada búsqueda, comando, inspección, descarga, render o
+  validación interna. Si no se puede editar, limitarse a un aviso inicial y un
+  resumen final.
 
 `SKILL_DIR` significa la ruta absoluta de la carpeta que contiene este
 `SKILL.md`. Los scripts y presets de esta skill son autocontenidos; no uses los
@@ -76,11 +84,14 @@ python "<SKILL_DIR>/scripts/prepare_link.py" "<URL>" "<WORK_DIR>" --max-images 2
 python "<SKILL_DIR>/scripts/compose_image.py" "<MEDIA_01>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 ```
 
-Para varios enlaces en un solo carrusel:
+Para varios enlaces, descargar el conjunto y después componer una salida por
+cada elemento de `sources[]`; no pasar la lista plana de imágenes a una única
+composición:
 
 ```text
 python "<SKILL_DIR>/scripts/prepare_batch.py" "<WORK_DIR>" "<URL_1>" "<URL_2>" --max-images 24
-python "<SKILL_DIR>/scripts/compose_image.py" "<TODOS_LOS_PATHS_DEL_JSON>" "<OUTPUT>.png" --top "<TITULAR_GENERAL>" --bottom "<CONTEXTO Y FECHA>" --format 9:16 --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/compose_image.py" "<PATHS_DE_SOURCES_01>" "<OUTPUT_01>.png" --top "<TITULAR_01>" --bottom "<CONTEXTO_01_Y_FECHA>" --format 9:16 --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+python "<SKILL_DIR>/scripts/compose_image.py" "<PATHS_DE_SOURCES_02>" "<OUTPUT_02>.png" --top "<TITULAR_02>" --bottom "<CONTEXTO_02_Y_FECHA>" --format 9:16 --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 ```
 
 ### Cuadrada 1:1
@@ -89,8 +100,8 @@ python "<SKILL_DIR>/scripts/compose_image.py" "<TODOS_LOS_PATHS_DEL_JSON>" "<OUT
 python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 1:1 --resolution 4k --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_square_image.json"
 ```
 
-Para varios enlaces en un carrusel cuadrado, usar `prepare_batch.py` y una
-sola llamada a `compose_image.py` con todos los paths del JSON, `--resolution 4k`,
+Para varios enlaces cuadrados, usar `prepare_batch.py` y una llamada a
+`compose_image.py` por cada `sources[i].images`, con `--resolution 4k`,
 `--fit contain` y el preset cuadrado.
 
 Para archivos locales, sustituir `edit_link.py` por
@@ -116,8 +127,8 @@ python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode 
 - Usar color solo en palabras importantes mediante `{PALABRA|HEX}`. No marcar
   `de`, `la`, `los`, `a`, `o`, `y`, `que`, `se` ni otras palabras funcionales;
   la CLI rechaza esos marcadores y más de dos colores.
-- Para cada lote, devolver un único caption con el titular general, la fecha y
-  exactamente cinco hashtags únicos, incluyendo `#khetzalgg`. Consultar el
+- Para cada publicación, devolver un caption independiente con su titular, la
+  fecha y exactamente cinco hashtags únicos, incluyendo `#khetzalgg`. Consultar el
   [TikTok Creative Center](https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en),
   preferentemente con región España e industria Gaming/Fortnite, para elegir
   los otros cuatro hashtags del día y no afirmar viralidad si no se pudo verificar.

@@ -137,17 +137,21 @@ class ComposeImageTests(unittest.TestCase):
                 "{FORTNITE|8B3DFF}", "{NOTICIAS|FF8A00} {TEMPORADA|E000FF}"
             )
 
-    def test_prepare_batch_preserves_source_groups_and_single_caption_contract(self):
+    def test_prepare_batch_preserves_one_output_group_per_publication(self):
         def fake_download(url, output_dir, max_images):
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            image_path = output_dir / "01.png"
-            make_image(image_path, size=(640, 360))
+            image_count = 2 if url.endswith("/uno") else 1
+            images = []
+            for index in range(1, image_count + 1):
+                image_path = output_dir / f"{index:02d}.png"
+                make_image(image_path, size=(640, 360))
+                images.append({"path": str(image_path), "url": url, "format": "PNG", "width": 640, "height": 360})
             return {
                 "url": url,
                 "source_type": "x-post",
                 "post_text": f"texto de {url}",
-                "images": [{"path": str(image_path), "url": url, "format": "PNG", "width": 640, "height": 360}],
+                "images": images,
             }
 
         with patch.object(prepare_batch_module, "download_link_info", side_effect=fake_download):
@@ -157,11 +161,14 @@ class ComposeImageTests(unittest.TestCase):
                 max_images=4,
             )
 
-        self.assertEqual(manifest["batch_type"], "carousel")
+        self.assertEqual(manifest["batch_type"], "publication-set")
         self.assertEqual(manifest["source_count"], 2)
         self.assertEqual([source["source_index"] for source in manifest["sources"]], [1, 2])
-        self.assertEqual([item["source_index"] for item in manifest["images"]], [1, 2])
-        self.assertEqual(manifest["editorial_contract"]["caption_hashtag_count"], 5)
+        self.assertEqual([source["count"] for source in manifest["sources"]], [2, 1])
+        self.assertEqual([item["source_index"] for item in manifest["images"]], [1, 1, 2])
+        self.assertTrue(manifest["editorial_contract"]["one_output_per_source"])
+        self.assertTrue(manifest["editorial_contract"]["separate_documents"])
+        self.assertEqual(manifest["editorial_contract"]["caption_hashtag_count_per_source"], 5)
         self.assertEqual(manifest["editorial_contract"]["required_brand_hashtag"], "#khetzalgg")
 
     def test_square_skill_wrapper_matches_canonical_compositor(self):
