@@ -24,6 +24,7 @@ from fetch_media import (
 )
 from fixtures.images import image_bytes, make_image
 import edit_link as edit_link_module
+import prepare_batch as prepare_batch_module
 
 
 COMPOSER = ROOT / "bin" / "compose_image.py"
@@ -108,6 +109,43 @@ class ComposeImageTests(unittest.TestCase):
         loaded = COMPOSER_MODULE.load_image(source)
 
         self.assertEqual(loaded.size, (30, 20))
+
+    def test_text_markup_rejects_empty_text_stopwords_and_excess_colors(self):
+        with self.assertRaisesRegex(ValueError, "superior.*vacío"):
+            COMPOSER_MODULE.validate_text_markup("   ", "CONTEXTO")
+        with self.assertRaisesRegex(ValueError, "palabra funcional"):
+            COMPOSER_MODULE.validate_text_markup("NOVEDADES {de|8B3DFF}", "CONTEXTO")
+        with self.assertRaisesRegex(ValueError, "dos colores"):
+            COMPOSER_MODULE.validate_text_markup(
+                "{FORTNITE|8B3DFF}", "{NOTICIAS|FF8A00} {TEMPORADA|E000FF}"
+            )
+
+    def test_prepare_batch_preserves_source_groups_and_single_caption_contract(self):
+        def fake_download(url, output_dir, max_images):
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            image_path = output_dir / "01.png"
+            make_image(image_path, size=(640, 360))
+            return {
+                "url": url,
+                "source_type": "x-post",
+                "post_text": f"texto de {url}",
+                "images": [{"path": str(image_path), "url": url, "format": "PNG", "width": 640, "height": 360}],
+            }
+
+        with patch.object(prepare_batch_module, "download_link_info", side_effect=fake_download):
+            manifest = prepare_batch_module.download_batch_info(
+                ["https://x.test/uno", "https://x.test/dos"],
+                self.work / "batch",
+                max_images=4,
+            )
+
+        self.assertEqual(manifest["batch_type"], "carousel")
+        self.assertEqual(manifest["source_count"], 2)
+        self.assertEqual([source["source_index"] for source in manifest["sources"]], [1, 2])
+        self.assertEqual([item["source_index"] for item in manifest["images"]], [1, 2])
+        self.assertEqual(manifest["editorial_contract"]["caption_hashtag_count"], 5)
+        self.assertEqual(manifest["editorial_contract"]["required_brand_hashtag"], "#khetzalgg")
 
     def test_square_skill_wrapper_matches_canonical_compositor(self):
         square_inputs = []

@@ -7,6 +7,8 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 
 - `bin/compose_image.py`: compositor principal Pillow para 1 o más imágenes.
 - `bin/fetch_media.py`: descarga en orden todas las imágenes de un post de X/Twitter.
+- `bin/prepare_batch.py`: descarga varios enlaces como un único lote/carrusel,
+  conservando el texto, los grupos y el orden de cada fuente.
 - `bin/edit_link.py`: une descarga + composición en un solo comando.
 - `skills/media/vertical-image-editor/scripts/compose_image.py`: entrada
   compatible con la skill que delega en el compositor principal.
@@ -134,6 +136,14 @@ Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
 `--style`, `--format`, `--fit` y `--max-images`) y las valida con el compositor
 canónico.
 
+Para varios enlaces enviados juntos, usa `prepare_batch.py` y compón una sola
+tarjeta con todos los paths del manifiesto. El titular y la fecha son comunes a
+todo el carrusel; usa `--fit contain` para evitar zoom o recortes de capturas.
+La respuesta/caption debe llevar exactamente cinco hashtags, incluyendo
+`#khetzalgg`; los otros cuatro se eligen consultando las tendencias del día en
+[TikTok Creative Center](https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en)
+y solo si son relevantes para Fortnite.
+
 La fuente Barlow se resuelve desde `barlow_font/` y el preset funciona aunque el
 comando se ejecute desde otro directorio. Las skills para Hermes llevan su
 propia fuente, presets y scripts para no depender de esa ruta.
@@ -188,6 +198,10 @@ El workflow de GitHub Actions repite la compilación y la suite en Python 3.10,
 - Paleta Halloween: morado, naranja, magenta y dorado.
 - Marca fija: `CÓDIGO: KHETZALGG`.
 - Un color por palabra; en el estilo habitual: una palabra arriba y dos abajo.
+- El texto normal es blanco y no se colorean palabras funcionales (`de`, `la`,
+  `los`, `a`, `o`, `y`, `que`, `se`); el compositor rechaza esos marcadores.
+- El titular y el contexto siempre son obligatorios; el compositor rechaza
+  textos vacíos para impedir tarjetas sin texto.
 - Las tablas de banderas/horarios se tratan como un bloque único centrado.
 - En modo `adaptive`, horizontal significa ratio ≥ 1.25, cuadrada significa
   0.8–1.25 y vertical significa ratio ≤ 0.8.

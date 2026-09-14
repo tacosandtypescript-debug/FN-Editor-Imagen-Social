@@ -60,6 +60,7 @@ class ProjectIntegrityTests(unittest.TestCase):
             BIN / "compose_image.py",
             BIN / "fetch_media.py",
             BIN / "edit_link.py",
+            BIN / "prepare_batch.py",
             BIN / "runtime_config.py",
             BIN / "preset.json",
             BIN / "preset_square.json",
@@ -178,6 +179,7 @@ class ProjectIntegrityTests(unittest.TestCase):
             "compose_image.py",
             "edit_link.py",
             "prepare_link.py",
+            "prepare_batch.py",
             "fetch_media.py",
             "render_backend.py",
             "runtime_config.py",
@@ -191,6 +193,7 @@ class ProjectIntegrityTests(unittest.TestCase):
                 content = manifest.read_text(encoding="utf-8")
                 self.assertIn("platforms: [linux, macos, windows]", content)
                 self.assertIn("scripts/prepare_link.py", content)
+                self.assertIn("scripts/prepare_batch.py", content)
                 self.assertTrue((skill_dir / "assets" / "Barlow-BlackItalic.ttf").is_file())
                 self.assertTrue((skill_dir / "assets" / "OFL.txt").is_file())
                 self.assertEqual(

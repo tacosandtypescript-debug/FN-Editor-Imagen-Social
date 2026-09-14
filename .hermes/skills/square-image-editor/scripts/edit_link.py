@@ -113,6 +113,10 @@ def main():
         help=f"maximo de imagenes descargadas (defecto: {DEFAULT_MAX_IMAGES})",
     )
     args = parser.parse_args()
+    if not args.top.strip():
+        parser.error("--top no puede estar vacío: el titular debe aparecer en la imagen")
+    if not args.bottom.strip():
+        parser.error("--bottom no puede estar vacío: el contexto debe aparecer en la imagen")
 
     with tempfile.TemporaryDirectory(prefix="editimg-media-") as temporary:
         try:

@@ -1,7 +1,7 @@
 ---
 name: fortnite-image-editor
 description: "Skill principal para editar imágenes de noticias Fortnite: activar cuando el usuario pegue un enlace de X/Twitter, una URL directa de imagen o adjunte imágenes. Descarga todos los medios, decide vertical 9:16 o cuadrada 1:1, compone, valida y entrega el PNG."
-version: 3.0.0
+version: 3.1.0
 author: Isaac
 license: MIT
 platforms: [linux, macos, windows]
@@ -28,23 +28,30 @@ no responder solo con un resumen ni detenerse tras descargar los medios.
 No cargar los dos modos para una misma tarjeta. Si Isaac pide varios formatos,
 crear una salida independiente por formato.
 
-## Procedimiento obligatorio para un enlace
+## Procedimiento obligatorio
 
 1. Identificar si es un post de `x.com`/`twitter.com` o una URL directa de
    imagen. En un post, obtener el texto visible antes de redactar el titular.
    Si se necesita hacerlo desde el paquete, ejecutar primero
    `scripts/prepare_link.py`; su JSON devuelve `post_text` y todos los medios
    descargados en orden.
-2. Completar la edición en la misma petición: ejecutar el `edit_link.py` de
+2. Si Isaac envía varios enlaces en el mismo mensaje, ejecutar
+   `scripts/prepare_batch.py` con todos ellos en el orden recibido. El JSON
+   devuelve `sources[].post_text`, la agrupación por enlace y `images` ya
+   ordenadas. Es un solo carrusel: redactar un único titular general que
+   abarque todos los temas y un único contexto/fecha; no generar un título por
+   cada enlace.
+3. Completar la edición en la misma petición: ejecutar el `edit_link.py` de
    esta skill (si ya se obtuvo el texto con una herramienta) o ejecutar
    `compose_image.py` sobre los archivos que devolvió `prepare_link.py`. Nunca
    dejar la tarea en “descarga terminada”. Conserva el límite de 24 medios;
    para vídeos o GIFs, el descargador usa la miniatura disponible.
-3. Si Isaac no da textos, redactar un titular español de 3–7 palabras y un
-   contexto de una línea basados en el post. Si no se puede leer el post,
-   utilizar un texto neutro y avisar; no inventar la noticia.
-4. Ejecutar `verify_image.py` con formato PNG, modo RGBA y dimensiones del modo.
-5. Entregar inmediatamente la tarjeta final como documento/archivo original
+4. Si Isaac no da textos, redactar el titular general en español (3–12 palabras
+   para un lote; 3–7 para una sola fuente) y una línea de contexto con la fecha,
+   basados solo en los posts. Si no se puede leer una fuente, avisar; no
+   inventar la noticia.
+5. Ejecutar `verify_image.py` con formato PNG, modo RGBA y dimensiones del modo.
+6. Entregar inmediatamente la tarjeta final como documento/archivo original
    cuando el canal lo permita. No entregar una previsualización comprimida como
    sustituto del PNG.
 
@@ -68,11 +75,22 @@ python "<SKILL_DIR>/scripts/prepare_link.py" "<URL>" "<WORK_DIR>" --max-images 2
 python "<SKILL_DIR>/scripts/compose_image.py" "<MEDIA_01>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 9:16 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
 ```
 
+Para varios enlaces en un solo carrusel:
+
+```text
+python "<SKILL_DIR>/scripts/prepare_batch.py" "<WORK_DIR>" "<URL_1>" "<URL_2>" --max-images 24
+python "<SKILL_DIR>/scripts/compose_image.py" "<TODOS_LOS_PATHS_DEL_JSON>" "<OUTPUT>.png" --top "<TITULAR_GENERAL>" --bottom "<CONTEXTO Y FECHA>" --format 9:16 --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+```
+
 ### Cuadrada 1:1
 
 ```text
 python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 1:1 --fit auto --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_square_image.json"
 ```
+
+Para varios enlaces en un carrusel cuadrado, usar `prepare_batch.py` y una
+sola llamada a `compose_image.py` con todos los paths del JSON, `--fit contain`
+y el preset cuadrado.
 
 Para archivos locales, sustituir `edit_link.py` por
 `compose_image.py` y pasar una o más imágenes antes de la salida.
@@ -92,6 +110,16 @@ python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode 
 - Cuadrada: dos imágenes cuadradas en una fila; si las fuentes son mixtas,
   conservarlas completas con `contain` cuando sea necesario.
 - No añadir créditos ni nombres de autores dentro de la imagen.
+- El texto debe ir siempre en las zonas superior e inferior. No usar una cadena
+  vacía para `--top` o `--bottom`; la CLI la rechaza.
+- Usar color solo en palabras importantes mediante `{PALABRA|HEX}`. No marcar
+  `de`, `la`, `los`, `a`, `o`, `y`, `que`, `se` ni otras palabras funcionales;
+  la CLI rechaza esos marcadores y más de dos colores.
+- Para cada lote, devolver un único caption con el titular general, la fecha y
+  exactamente cinco hashtags únicos, incluyendo `#khetzalgg`. Consultar el
+  [TikTok Creative Center](https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en),
+  preferentemente con región España e industria Gaming/Fortnite, para elegir
+  los otros cuatro hashtags del día y no afirmar viralidad si no se pudo verificar.
 - Si el usuario pide solo título y hashtags, devolver únicamente esas dos cosas;
   no generar una publicación larga.
 
@@ -106,6 +134,6 @@ python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode 
 ## Archivos que deben viajar con la skill
 
 `SKILL.md`, `scripts/compose_image.py`, `scripts/edit_link.py`,
-`scripts/prepare_link.py`, `scripts/fetch_media.py`, `scripts/render_backend.py`,
+`scripts/prepare_link.py`, `scripts/prepare_batch.py`, `scripts/fetch_media.py`, `scripts/render_backend.py`,
 `scripts/runtime_config.py`, `scripts/verify_image.py`, ambos presets y
 `assets/Barlow-BlackItalic.ttf` y `assets/OFL.txt` forman el paquete completo.

@@ -45,6 +45,13 @@ from render_backend import (
 )
 
 SEG = re.compile(r"\{([^{}|]+)\|([0-9A-Fa-f]{6})\}")
+HIGHLIGHT_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+SPANISH_FUNCTION_WORDS = {
+    "a", "al", "ante", "bajo", "con", "contra", "de", "del", "desde",
+    "e", "el", "en", "entre", "hacia", "hasta", "la", "las", "lo",
+    "los", "o", "para", "por", "que", "se", "sin", "sobre", "un",
+    "una", "unos", "unas", "y", "u",
+}
 
 # ── Layouts de collage ──────────────────────────────────────────────────────
 # Cada layout: A_h (alto total en unidades del ancho) + lista de celdas
@@ -396,6 +403,24 @@ def segments(s, default_color="#FFFFFF"):
     if pos < len(s):
         out.append((s[pos:], default_color))
     return out or [(s, default_color)]
+
+
+def validate_text_markup(*texts):
+    """Reject empty text and highlights that violate the editorial contract."""
+    accent_colors = set()
+    for label, text in zip(("superior", "inferior"), texts):
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"el texto {label} no puede estar vacío")
+        for match in SEG.finditer(text):
+            marked_words = [word.casefold() for word in HIGHLIGHT_WORD_RE.findall(match.group(1))]
+            if any(word in SPANISH_FUNCTION_WORDS for word in marked_words):
+                raise ValueError(
+                    f"no se puede colorear una palabra funcional en el texto {label}: "
+                    f"'{match.group(1)}'"
+                )
+            accent_colors.add("#" + match.group(2).upper())
+    if len(accent_colors) > 2:
+        raise ValueError("usa como máximo dos colores de acento entre el titular y el contexto")
 
 def font_for(path, size):
     if path:
@@ -749,6 +774,10 @@ def main():
         help="backend de renderizado: auto usa CUDA si está disponible (defecto: auto)",
     )
     a = ap.parse_args()
+    try:
+        validate_text_markup(a.top, a.bottom)
+    except ValueError as exc:
+        ap.error(str(exc))
     try:
         backend = resolve_backend(a.backend)
     except (BackendUnavailable, ValueError) as exc:
