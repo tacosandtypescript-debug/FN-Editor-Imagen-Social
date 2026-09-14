@@ -4,15 +4,19 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from PIL import ImageFont
+from PIL import Image, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "bin"
 SKILLS_ROOT = ROOT / "skills" / "media"
+HERMES_SKILLS_ROOT = ROOT / ".hermes" / "skills"
 COMPOSER = BIN / "compose_image.py"
 sys.path.insert(0, str(ROOT / "tests"))
 from fixtures.images import make_image
@@ -150,6 +154,139 @@ class ProjectIntegrityTests(unittest.TestCase):
                 self.assertIsNone(re.search(r"/home/[^/]+/", content))
                 self.assertIsNone(re.search(r"/Users/[^/]+/", content))
                 self.assertIsNone(re.search(r"[A-Za-z]:\\\\", content))
+
+    def test_hermes_project_skills_are_discoverable_and_self_contained(self):
+        self.assertTrue((ROOT / ".hermes.md").is_file())
+        expected = {
+            "fortnite-image-editor": {
+                "preset": "fortnite_vertical_image.json",
+                "size": (1080, 1920),
+                "presets": {"fortnite_vertical_image.json", "fortnite_square_image.json"},
+            },
+            "vertical-image-editor": {
+                "preset": "fortnite_vertical_image.json",
+                "size": (1080, 1920),
+                "presets": {"fortnite_vertical_image.json"},
+            },
+            "square-image-editor": {
+                "preset": "fortnite_square_image.json",
+                "size": (1080, 1080),
+                "presets": {"fortnite_square_image.json"},
+            },
+        }
+        required_scripts = {
+            "compose_image.py",
+            "edit_link.py",
+            "prepare_link.py",
+            "fetch_media.py",
+            "render_backend.py",
+            "runtime_config.py",
+            "verify_image.py",
+        }
+
+        for name, spec in expected.items():
+            with self.subTest(skill=name):
+                skill_dir = HERMES_SKILLS_ROOT / name
+                manifest = skill_dir / "SKILL.md"
+                content = manifest.read_text(encoding="utf-8")
+                self.assertIn("platforms: [linux, macos, windows]", content)
+                self.assertIn("scripts/prepare_link.py", content)
+                self.assertTrue((skill_dir / "assets" / "Barlow-BlackItalic.ttf").is_file())
+                self.assertTrue((skill_dir / "assets" / "OFL.txt").is_file())
+                self.assertEqual(
+                    {path.name for path in (skill_dir / "references" / "presets").glob("*.json")},
+                    spec["presets"],
+                )
+                for script_name in required_scripts:
+                    self.assertTrue((skill_dir / "scripts" / script_name).is_file())
+                link_script = (skill_dir / "scripts" / "edit_link.py").read_text(encoding="utf-8")
+                self.assertIn("SKILL_ROOT = Path(__file__).resolve().parents[1]", link_script)
+                self.assertNotIn('ROOT / "bin"', link_script)
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    work = Path(temporary)
+                    source = make_image(work / "source.png", size=(640, 360))
+                    output = work / "result.png"
+                    preset = skill_dir / "references" / "presets" / spec["preset"]
+                    compose_result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(skill_dir / "scripts" / "compose_image.py"),
+                            str(source),
+                            str(output),
+                            "--top",
+                            "TITULAR",
+                            "--bottom",
+                            "CONTEXTO",
+                            "--preset",
+                            str(preset),
+                        ],
+                        cwd=work,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(compose_result.returncode, 0, compose_result.stderr)
+                    verify_result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(skill_dir / "scripts" / "verify_image.py"),
+                            str(output),
+                            "--format",
+                            "PNG",
+                            "--mode",
+                            "RGBA",
+                            "--width",
+                            str(spec["size"][0]),
+                            "--height",
+                            str(spec["size"][1]),
+                        ],
+                        cwd=work,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(verify_result.returncode, 0, verify_result.stderr)
+
+    def test_hermes_edit_link_completes_a_direct_link_outside_the_repo(self):
+        skill_dir = HERMES_SKILLS_ROOT / "fortnite-image-editor"
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            make_image(work / "source.png", size=(640, 360))
+            output = work / "direct-link.png"
+            handler = partial(SimpleHTTPRequestHandler, directory=str(work))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(skill_dir / "scripts" / "edit_link.py"),
+                        f"http://127.0.0.1:{server.server_port}/source.png",
+                        str(output),
+                        "--top",
+                        "TITULAR",
+                        "--bottom",
+                        "CONTEXTO",
+                        "--backend",
+                        "cpu",
+                    ],
+                    cwd=work,
+                    text=True,
+                    capture_output=True,
+                )
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+            self.assertEqual(summary["source_type"], "direct-image")
+            self.assertEqual(summary["count"], 1)
+            self.assertIsNone(summary["post_text"])
+            self.assertTrue(output.is_file())
+            with Image.open(output) as image:
+                self.assertEqual((image.width, image.height), (1080, 1920))
 
     def test_presets_pass_the_canonical_validation(self):
         composer = load_composer_module()

@@ -15,7 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from fetch_media import download_link, extract_media_urls, parse_x_status_url
+from fetch_media import (
+    download_link,
+    download_link_info,
+    extract_media_urls,
+    extract_post_text,
+    parse_x_status_url,
+)
 from fixtures.images import image_bytes, make_image
 import edit_link as edit_link_module
 
@@ -531,6 +537,50 @@ class ComposeImageTests(unittest.TestCase):
             }),
             ["https://pbs.twimg.com/media/photo.jpg?format=jpg&name=orig"],
         )
+
+    def test_fxtwitter_shape_exposes_media_and_post_text(self):
+        payload = {
+            "tweet": {
+                "text": "Nueva noticia de Fortnite",
+                "media": {
+                    "all": [
+                        {"type": "photo", "url": "https://cdn.example/one.jpg"},
+                        {"type": "video", "thumbnail_url": "https://cdn.example/two.jpg"},
+                    ],
+                },
+            },
+        }
+        self.assertEqual(
+            extract_media_urls(payload),
+            ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"],
+        )
+        self.assertEqual(extract_post_text(payload), "Nueva noticia de Fortnite")
+
+    def test_download_link_info_returns_post_text_for_agent(self):
+        post_payload = {
+            "tweet": {
+                "text": "El evento llega esta semana",
+                "mediaURLs": ["https://cdn.example/event.jpg"],
+            },
+        }
+
+        def fake_request(url, *args, **kwargs):
+            if url == "https://api.vxtwitter.com/example/status/123456":
+                return json.dumps(post_payload).encode("utf-8")
+            if url == "https://cdn.example/event.jpg":
+                return image_bytes("JPEG")
+            raise AssertionError(f"URL inesperada: {url}")
+
+        with patch("fetch_media.request_bytes", side_effect=fake_request):
+            info = download_link_info(
+                "https://x.com/example/status/123456",
+                self.work / "post-download",
+            )
+
+        self.assertEqual(info["source_type"], "x-post")
+        self.assertEqual(info["post_text"], "El evento llega esta semana")
+        self.assertEqual(len(info["images"]), 1)
+        self.assertTrue(Path(info["images"][0]["path"]).is_file())
 
 
 if __name__ == "__main__":

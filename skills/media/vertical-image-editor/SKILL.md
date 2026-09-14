@@ -1,10 +1,10 @@
 ---
 name: vertical-image-editor
-description: "Use when editing Fortnite news images into vertical cards."
+description: "Usar para editar noticias Fortnite desde un enlace de X/Twitter o archivos adjuntos cuando el resultado sea vertical, 9:16, story, historia o 1080x1920."
 version: 2.2.0
 author: Hermes Agent
 license: MIT
-platforms: [linux, macos]
+platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [imagenes, fortnite, vertical, 9:16, blur, collage, telegram]

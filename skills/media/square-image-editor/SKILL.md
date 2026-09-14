@@ -1,10 +1,10 @@
 ---
 name: square-image-editor
-description: "Use when editing Fortnite news images into square cards."
+description: "Usar para editar noticias Fortnite desde un enlace de X/Twitter o archivos adjuntos cuando el resultado sea cuadrado, 1:1, feed, post cuadrado o 1080x1080."
 version: 1.1.0
 author: Hermes Agent
 license: MIT
-platforms: [linux, macos]
+platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [imagenes, fortnite, cuadrado, 1:1, collage, telegram]

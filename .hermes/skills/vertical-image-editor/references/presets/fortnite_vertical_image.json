@@ -1,0 +1,51 @@
+{
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
+  "gap": 32,
+  "font": "assets/Barlow-BlackItalic.ttf",
+  "font_size": 72,
+  "min_font_size": 32,
+  "text_color": "#FFFFFF",
+  "outline_width": 6,
+  "foreground_max_width": 1000,
+  "foreground_max_height": 1120,
+  "corner_radius": 54,
+  "grid_gap": 24,
+  "grid_padding": 60,
+  "text_margin": 60,
+  "outer_margin": 90,
+  "palette": {
+    "halloween_purple": "#8B3DFF",
+    "halloween_orange": "#FF7A00",
+    "halloween_magenta": "#E83DFF",
+    "halloween_gold": "#FFD166"
+  },
+  "watermark": {
+    "text": "CÓDIGO: KHETZALGG",
+    "size": 46,
+    "opacity": 125,
+    "bottom_margin": 145,
+    "side_mode": "auto",
+    "side_gap": 8
+  },
+  "text_shadow": {
+    "blur": 14,
+    "offset": [
+      3,
+      5
+    ],
+    "opacity": 72
+  },
+  "shadow": {
+    "blur": 28,
+    "offset": [
+      -8,
+      12
+    ],
+    "opacity": 48
+  },
+  "background_blur": 16,
+  "background_dim": 0.92
+}

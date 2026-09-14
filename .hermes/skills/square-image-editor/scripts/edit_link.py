@@ -13,9 +13,9 @@ from fetch_media import download_link_info
 from runtime_config import DEFAULT_MAX_IMAGES
 
 
-ROOT = Path(__file__).resolve().parents[1]
-COMPOSER = ROOT / "bin" / "compose_image.py"
-DEFAULT_PRESET = ROOT / "bin" / "preset.json"
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+COMPOSER = SKILL_ROOT / "scripts" / "compose_image.py"
+DEFAULT_PRESET = SKILL_ROOT / "references" / "presets" / "fortnite_square_image.json"
 
 
 def build_composer_command(args, input_paths):

@@ -23,7 +23,7 @@ Proyecto completo para crear tarjetas verticales 1080×1920 y cuadradas
 
 ## Requisitos
 
-- Linux o macOS para el editor principal
+- Windows, Linux o macOS para el editor principal
 - Linux con X11 si se usa `bin/clipboard_server.py`
 - Python 3.10+
 - Pillow
@@ -135,7 +135,36 @@ Desde un enlace, añade `--format 1:1` y el preset cuadrado al comando de
 canónico.
 
 La fuente Barlow se resuelve desde `barlow_font/` y el preset funciona aunque el
-comando se ejecute desde otro directorio.
+comando se ejecute desde otro directorio. Las skills para Hermes llevan su
+propia fuente, presets y scripts para no depender de esa ruta.
+
+## Hermes Agent
+
+Las skills que Hermes debe cargar están directamente bajo `.hermes/skills/`.
+Desde la raíz del repositorio, confía el proyecto una vez y comprueba que el
+editor aparezca:
+
+```text
+hermes skills trust
+hermes skills list
+```
+
+Si Hermes ya tenía una sesión abierta, usa `/reset` o inicia una sesión nueva
+para reconstruir el índice. El CLI puede mostrar estas skills como `local`; en
+el prompt del agente las skills de proyecto se etiquetan como `[project]`.
+
+Para instalar solo la skill principal desde este repositorio usa la URL directa
+de su `SKILL.md`, no la URL de la carpeta de GitHub:
+
+```text
+hermes skills install https://raw.githubusercontent.com/tacosandtypescript-debug/FN-Editor-Imagen-Social/main/.hermes/skills/fortnite-image-editor/SKILL.md
+```
+
+El flujo de enlace está diseñado para completar la petición: obtiene el texto
+del post, descarga todos los medios, compone, valida con `verify_image.py` y
+entrega el PNG. `prepare_link.py` permite separar la descarga y devolver
+`post_text` en JSON antes de componer; `edit_link.py` es la variante de una sola
+orden cuando el agente ya tiene el texto.
 
 ## Pruebas
 
