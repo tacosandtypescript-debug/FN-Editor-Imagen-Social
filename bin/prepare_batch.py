@@ -11,8 +11,16 @@ import json
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
+from compose_image import infer_output_format
 from fetch_media import download_link_info
 from runtime_config import DEFAULT_MAX_IMAGES
+
+
+OUTPUT_DIMENSIONS_4K = {
+    "9:16": [2160, 3840],
+    "1:1": [2160, 2160],
+    "16:9": [3840, 2160],
+}
 
 
 def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
@@ -37,6 +45,9 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
             }
             source_images.append(enriched)
             images.append(enriched)
+        recommended_format = infer_output_format(
+            [(item["width"], item["height"]) for item in source_images]
+        )
         sources.append({
             "source_index": source_index,
             "url": info["url"],
@@ -44,6 +55,8 @@ def download_batch_info(urls, output_dir, max_images=DEFAULT_MAX_IMAGES):
             "post_text": info["post_text"],
             "images": source_images,
             "count": len(source_images),
+            "recommended_format": recommended_format,
+            "recommended_4k_dimensions": OUTPUT_DIMENSIONS_4K[recommended_format],
         })
 
     return {

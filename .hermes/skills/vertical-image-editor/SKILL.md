@@ -1,7 +1,7 @@
 ---
 name: vertical-image-editor
 description: "Usar obligatoriamente para editar una noticia o imagen de Fortnite desde un enlace de X/Twitter o archivos adjuntos cuando el resultado sea vertical, 9:16, story, historia o 2160x3840 4K. Descarga todos los medios, compone y valida un PNG."
-version: 3.2.0
+version: 3.3.0
 author: Isaac
 license: MIT
 platforms: [linux, macos, windows]
@@ -83,5 +83,6 @@ Para imágenes locales, usar `scripts/compose_image.py` en lugar de
 ## Paquete autocontenido
 
 La skill incluye `scripts/compose_image.py`, `edit_link.py`, `prepare_link.py`, `prepare_batch.py`, `fetch_media.py`,
-`render_backend.py`, `runtime_config.py`, `verify_image.py`, el preset vertical
+`render_backend.py`, `runtime_config.py`, `verify_image.py`, los presets vertical,
+cuadrado y horizontal (incluido el soporte `--format auto`)
 y `assets/Barlow-BlackItalic.ttf` y su licencia `assets/OFL.txt`.

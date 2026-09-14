@@ -127,6 +127,39 @@ class ComposeImageTests(unittest.TestCase):
         with Image.open(output) as image:
             self.assertEqual((image.width, image.height, image.mode), (2160, 3840, "RGBA"))
 
+    def test_auto_format_infers_horizontal_canvas_at_4k(self):
+        output = self.work / "auto-horizontal.png"
+        metadata = self.run_composer(
+            COMPOSER,
+            output,
+            "--format",
+            "auto",
+            "--resolution",
+            "4k",
+            "--backend",
+            "cpu",
+        )
+
+        self.assertEqual((metadata["width"], metadata["height"]), (3840, 2160))
+        self.assertEqual(metadata["requested_format"], "auto")
+        self.assertEqual(metadata["output_format"], "16:9")
+        with Image.open(output) as image:
+            self.assertEqual((image.width, image.height, image.mode), (3840, 2160, "RGBA"))
+
+    def test_auto_format_uses_square_for_mixed_tie(self):
+        self.assertEqual(
+            COMPOSER_MODULE.infer_output_format([(1600, 900), (900, 1600)]),
+            "1:1",
+        )
+        self.assertEqual(
+            COMPOSER_MODULE.infer_output_format([(900, 1600), (900, 1600), (1600, 900)]),
+            "9:16",
+        )
+        self.assertEqual(
+            COMPOSER_MODULE.infer_output_format([(1000, 1000), (1600, 900)]),
+            "1:1",
+        )
+
     def test_text_markup_rejects_empty_text_stopwords_and_excess_colors(self):
         with self.assertRaisesRegex(ValueError, "superior.*vacío"):
             COMPOSER_MODULE.validate_text_markup("   ", "CONTEXTO")
@@ -165,6 +198,14 @@ class ComposeImageTests(unittest.TestCase):
         self.assertEqual(manifest["source_count"], 2)
         self.assertEqual([source["source_index"] for source in manifest["sources"]], [1, 2])
         self.assertEqual([source["count"] for source in manifest["sources"]], [2, 1])
+        self.assertEqual(
+            [source["recommended_format"] for source in manifest["sources"]],
+            ["16:9", "16:9"],
+        )
+        self.assertEqual(
+            [source["recommended_4k_dimensions"] for source in manifest["sources"]],
+            [[3840, 2160], [3840, 2160]],
+        )
         self.assertEqual([item["source_index"] for item in manifest["images"]], [1, 1, 2])
         self.assertTrue(manifest["editorial_contract"]["one_output_per_source"])
         self.assertTrue(manifest["editorial_contract"]["separate_documents"])
@@ -560,6 +601,22 @@ class ComposeImageTests(unittest.TestCase):
         self.assertIn("gpu", command)
         self.assertIn("--resolution", command)
         self.assertIn("native", command)
+
+    def test_edit_link_auto_selects_the_matching_bundled_preset(self):
+        args = edit_link_module.argparse.Namespace(
+            preset=PRESET,
+            output_format="auto",
+        )
+        link_info = {
+            "images": [
+                {"width": 1600, "height": 900},
+                {"width": 1400, "height": 800},
+            ],
+        }
+
+        selected = edit_link_module.select_auto_preset(args, link_info)
+
+        self.assertEqual(selected, ROOT / "bin" / "preset_horizontal.json")
 
     def test_relative_preset_is_resolved_from_repository_root(self):
         output = self.work / "relative-preset.png"

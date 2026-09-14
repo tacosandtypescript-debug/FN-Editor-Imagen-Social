@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compone una imagen vertical configurable con fondo cover blur, uno o
+"""Compone una imagen configurable con fondo cover blur, uno o
 varios sujetos (collage de 2+ imagenes), esquinas redondeadas, sombra exterior de
 dos capas y texto superior/inferior segmentado con palabras de color.
 
@@ -27,6 +27,7 @@ rellena su rectangulo con cover centrado (nunca deforma; recorta los bordes
 justos). Usa --fit contain para conservar la imagen completa en cada celda.
 """
 import argparse, json, math, re, sys
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps, ImageStat
@@ -99,6 +100,33 @@ def aspect_bucket(size):
     if ratio <= 0.8:
         return "portrait", 9 / 16
     return "square", 1.0
+
+
+OUTPUT_FORMAT_BY_BUCKET = {
+    "portrait": "9:16",
+    "square": "1:1",
+    "landscape": "16:9",
+}
+
+
+def infer_output_format(sizes):
+    """Choose one canvas ratio for a publication's complete media group.
+
+    A majority orientation wins. A tie between portrait and landscape uses a
+    square canvas as the neutral option; square sources also win ties directly.
+    """
+    buckets = [aspect_bucket(size)[0] for size in sizes]
+    if not buckets:
+        raise ValueError("no se puede inferir el formato sin imagenes")
+    counts = Counter(buckets)
+    max_count = max(counts.values())
+    if counts.get("square", 0) == max_count:
+        bucket = "square"
+    elif counts.get("portrait", 0) == counts.get("landscape", 0):
+        bucket = "square"
+    else:
+        bucket = max(counts, key=counts.get)
+    return OUTPUT_FORMAT_BY_BUCKET[bucket]
 
 
 def adaptive_layout(
@@ -804,7 +832,7 @@ def main():
                     help="estilo de collage (defecto: auto segun la cantidad de imagenes)")
     ap.add_argument(
         "--format", dest="output_format", default=None,
-        help="proporcion de salida, por ejemplo 1:1, 4:5, 16:9 o 9:16",
+        help="proporcion de salida o auto (1:1, 4:5, 16:9, 9:16)",
     )
     ap.add_argument(
         "--fit", choices=("auto", "cover", "contain"), default="auto",
@@ -851,8 +879,18 @@ def main():
     except ValueError as exc:
         ap.error(str(exc))
     try:
+        srcs = [load_image(p) for p in src_paths]
+    except ValueError as exc:
+        ap.error(str(exc))
+    requested_format = str(a.output_format).strip().lower() if a.output_format else None
+    resolved_format = (
+        infer_output_format([src.size for src in srcs])
+        if requested_format == "auto"
+        else a.output_format
+    )
+    try:
         W, H = format_dimensions(
-            a.output_format,
+            resolved_format,
             (cfg["canvas"]["width"], cfg["canvas"]["height"]),
             short_edge=min(cfg["canvas"]["width"], cfg["canvas"]["height"]),
         )
@@ -861,7 +899,6 @@ def main():
     cfg["canvas"] = {"width": W, "height": H}
     try:
         validate_config(cfg)
-        srcs = [load_image(p) for p in src_paths]
     except ValueError as exc:
         ap.error(str(exc))
     equal_pair_cells_active = (
@@ -1073,6 +1110,8 @@ def main():
     print(json.dumps({
         "output": str(out), "width": W, "height": H,
         "images": N, "ratio": round(ratio, 3), "style": style,
+        "requested_format": a.output_format,
+        "output_format": resolved_format or f"{W}:{H}",
         "backend": backend,
         "resolution": a.resolution,
         "resolution_scale": resolution_scale,

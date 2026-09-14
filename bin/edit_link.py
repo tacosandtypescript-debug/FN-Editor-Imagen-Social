@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from compose_image import STYLES, positive_int
+from compose_image import STYLES, infer_output_format, positive_int
 from fetch_media import download_link_info
 from runtime_config import DEFAULT_MAX_IMAGES
 
@@ -18,6 +18,11 @@ from runtime_config import DEFAULT_MAX_IMAGES
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSER = ROOT / "bin" / "compose_image.py"
 DEFAULT_PRESET = ROOT / "bin" / "preset.json"
+AUTO_PRESETS = {
+    "9:16": DEFAULT_PRESET,
+    "1:1": ROOT / "bin" / "preset_square.json",
+    "16:9": ROOT / "bin" / "preset_horizontal.json",
+}
 
 
 def validate_rendered_output(path, compose_metadata):
@@ -87,6 +92,27 @@ def build_composer_command(args, input_paths):
     return command
 
 
+def select_auto_preset(args, link_info):
+    """Select the matching bundled preset when the output format is auto."""
+    if str(getattr(args, "output_format", "") or "").strip().lower() != "auto":
+        return args.preset
+    sizes = [
+        (item["width"], item["height"])
+        for item in link_info["images"]
+        if item.get("width") and item.get("height")
+    ]
+    if not sizes:
+        return args.preset
+    resolved_format = infer_output_format(sizes)
+    try:
+        is_default_preset = Path(args.preset).resolve() == DEFAULT_PRESET.resolve()
+    except OSError:
+        is_default_preset = False
+    if is_default_preset:
+        return AUTO_PRESETS[resolved_format]
+    return args.preset
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Descarga todas las imágenes de un post y crea la composición final."
@@ -104,7 +130,10 @@ def main():
         "--style", default="auto", choices=("auto",) + STYLES,
         help="estilo de collage (defecto: auto)",
     )
-    parser.add_argument("--format", dest="output_format", default=None)
+    parser.add_argument(
+        "--format", dest="output_format", default=None,
+        help="proporcion de salida o auto para elegirla por orientacion",
+    )
     parser.add_argument("--fit", choices=("auto", "cover", "contain"), default="auto")
     parser.add_argument(
         "--backend", choices=("auto", "cpu", "gpu"), default="auto",
@@ -130,6 +159,7 @@ def main():
         except Exception as exc:
             parser.error(str(exc))
         input_paths = [item["path"] for item in link_info["images"]]
+        args.preset = select_auto_preset(args, link_info)
         command = build_composer_command(args, input_paths)
         completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, text=True)
         if completed.returncode == 0:

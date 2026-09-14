@@ -1,13 +1,13 @@
 ---
 name: fortnite-image-editor
-description: "Skill principal para editar imágenes de noticias Fortnite: activar cuando el usuario pegue un enlace de X/Twitter, una URL directa de imagen o adjunte imágenes. Descarga todos los medios, decide vertical 9:16 o cuadrada 1:1, compone, valida y entrega el PNG."
-version: 3.2.0
+description: "Skill principal para editar imágenes de noticias Fortnite: activar cuando el usuario pegue un enlace de X/Twitter, una URL directa de imagen o adjunte imágenes. Descarga todos los medios, decide automáticamente vertical 9:16, cuadrada 1:1 u horizontal 16:9, compone, valida y entrega el PNG."
+version: 3.3.0
 author: Isaac
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [fortnite, imagenes, x, twitter, enlace, link, vertical, cuadrado, 9:16, 1:1, telegram]
+    tags: [fortnite, imagenes, x, twitter, enlace, link, vertical, cuadrado, horizontal, auto, 9:16, 1:1, 16:9, telegram]
     related_skills: [vertical-image-editor, square-image-editor, editar-publicar-instagram]
 ---
 
@@ -28,8 +28,10 @@ El comando explícito de entrada es:
 Al recibirlo, activar esta skill y completar todo el flujo. El primer enlace es
 obligatorio; los siguientes son opcionales y pueden ir separados por espacios
 o saltos de línea. Los corchetes son marcadores y no se escriben literalmente.
-Sin una indicación adicional, usar vertical 9:16 en 4K. `cuadrada` o `1:1` en
-el mensaje selecciona el modo cuadrado. No pedir al usuario que elija entre
+Sin una indicación adicional, usar el modo `auto` en 4K: decidir entre
+vertical, cuadrado u horizontal según las imágenes de esa publicación.
+`cuadrada` o `1:1` en el mensaje selecciona el modo cuadrado; `horizontal`,
+`apaisada` o `16:9` selecciona el modo horizontal. No pedir al usuario que elija entre
 “carrusel global” o “tarjetas individuales”: la regla por defecto es una
 tarjeta/documento por enlace.
 
@@ -39,9 +41,10 @@ tarjeta/documento por enlace.
 |---|---|---|---|
 | `cuadrada`, `1:1`, `feed`, `post cuadrado` | square | `references/presets/fortnite_square_image.json` | 2160×2160 PNG |
 | `vertical`, `9:16`, `story`, `historia` | vertical | `references/presets/fortnite_vertical_image.json` | 2160×3840 PNG |
-| Sin formato explícito | vertical | vertical | 2160×3840 PNG |
+| `horizontal`, `16:9`, `apaisada`, `panorámica` | horizontal | `references/presets/fortnite_horizontal_image.json` | 3840×2160 PNG |
+| Sin formato explícito | auto | preset según orientación | 2160×3840, 2160×2160 o 3840×2160 PNG |
 
-No cargar los dos modos para una misma tarjeta. Si Isaac pide varios formatos,
+No cargar varios modos para una misma tarjeta. Si Isaac pide varios formatos,
 crear una salida independiente por formato.
 
 ## Procedimiento obligatorio
@@ -55,19 +58,27 @@ crear una salida independiente por formato.
    `scripts/prepare_batch.py` con todos ellos en el orden recibido. El JSON
    devuelve `sources[]` agrupado por publicación. Procesar cada fuente por
    separado: una publicación produce una salida y un documento; nunca mezclar
-   imágenes de enlaces distintos.
+   imágenes de enlaces distintos. Cada fuente incluye `recommended_format` y
+   `recommended_4k_dimensions` para seleccionar el preset correcto.
 3. Completar la edición de cada publicación en la misma petición: ejecutar
    `edit_link.py` para una fuente, o `compose_image.py` una vez con todos los
    paths de `sources[i].images`. Si una publicación trae 1, 2 o 3 imágenes,
    esas imágenes permanecen juntas en su única tarjeta. Nunca dejar la tarea en
    “descarga terminada”. Para vídeos o GIFs, usar la miniatura disponible.
-4. Si Isaac no da textos, redactar un titular en español para cada publicación
+4. Si Isaac no especifica formato, usar `--format auto`. Clasificar cada
+   imagen como `portrait`, `square` o `landscape`; la orientación mayoritaria
+   decide el lienzo de toda esa publicación. En empate entre vertical y
+   horizontal, usar cuadrado. Elegir el preset vertical, cuadrado u horizontal
+   correspondiente. No crear formatos distintos dentro de una misma
+   publicación.
+5. Si Isaac no da textos, redactar un titular en español para cada publicación
    (3–12 palabras si tiene varias imágenes; 3–7 si tiene una) y una línea de
    contexto con fecha, basados solo en el post correspondiente. No inventar la
    noticia.
-5. Ejecutar `verify_image.py` por cada salida, con PNG RGBA y dimensiones 4K
-   del modo: `2160×3840` vertical o `2160×2160` cuadrado.
-6. Entregar las tarjetas PNG 4K como documentos/archivos independientes y en
+6. Ejecutar `verify_image.py` por cada salida, con PNG RGBA y dimensiones 4K
+   del modo: `2160×3840` vertical, `2160×2160` cuadrado o `3840×2160`
+   horizontal.
+7. Entregar las tarjetas PNG 4K como documentos/archivos independientes y en
    el orden de los enlaces. En Telegram usar `sendDocument` (archivo), no
    `sendPhoto` (foto) ni una previsualización comprimida.
 
@@ -88,6 +99,20 @@ archivos equivalentes de la raíz del repositorio.
 
 Usa el intérprete Python disponible en el entorno de Hermes (`python` en
 Windows; `python3` normalmente en Linux/macOS).
+
+### Automático `/imagen`
+
+Para el comando `/imagen` sin formato explícito, descargar primero los medios,
+determinar la orientación del grupo y usar `--format auto`. `edit_link.py`
+selecciona automáticamente el preset vertical, cuadrado u horizontal cuando
+se usa el preset predeterminado de la skill:
+
+```text
+python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format auto --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_vertical_image.json"
+```
+
+En un lote, aplicar `--format auto` y el preset correspondiente por cada
+`sources[i]`; nunca pasar imágenes de fuentes distintas a una composición.
 
 ### Vertical 9:16
 
@@ -120,6 +145,13 @@ Para varios enlaces cuadrados, usar `prepare_batch.py` y una llamada a
 `compose_image.py` por cada `sources[i].images`, con `--resolution 4k`,
 `--fit contain` y el preset cuadrado.
 
+### Horizontal 16:9
+
+```text
+python "<SKILL_DIR>/scripts/edit_link.py" "<URL>" "<OUTPUT>.png" --top "<TITULAR>" --bottom "<CONTEXTO>" --format 16:9 --resolution 4k --fit contain --style auto --backend auto --max-images 24 --preset "<SKILL_DIR>/references/presets/fortnite_horizontal_image.json"
+python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode RGBA --width 3840 --height 2160
+```
+
 Para archivos locales, sustituir `edit_link.py` por
 `compose_image.py` y pasar una o más imágenes antes de la salida.
 
@@ -137,6 +169,8 @@ python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode 
   contexto abajo; máximo dos colores de acento.
 - Cuadrada: dos imágenes cuadradas en una fila; si las fuentes son mixtas,
   conservarlas completas con `contain` cuando sea necesario.
+- Horizontal: lienzo 16:9 `3840×2160`, con las fuentes completas dentro de un
+  collage adaptativo y las mismas zonas seguras para titular y contexto.
 - No añadir créditos ni nombres de autores dentro de la imagen.
 - El texto debe ir siempre en las zonas superior e inferior. No usar una cadena
   vacía para `--top` o `--bottom`; la CLI la rechaza.
@@ -163,5 +197,5 @@ python "<SKILL_DIR>/scripts/verify_image.py" "<OUTPUT>.png" --format PNG --mode 
 
 `SKILL.md`, `scripts/compose_image.py`, `scripts/edit_link.py`,
 `scripts/prepare_link.py`, `scripts/prepare_batch.py`, `scripts/fetch_media.py`, `scripts/render_backend.py`,
-`scripts/runtime_config.py`, `scripts/verify_image.py`, ambos presets y
+`scripts/runtime_config.py`, `scripts/verify_image.py`, los tres presets y
 `assets/Barlow-BlackItalic.ttf` y `assets/OFL.txt` forman el paquete completo.

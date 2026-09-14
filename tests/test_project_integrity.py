@@ -162,17 +162,27 @@ class ProjectIntegrityTests(unittest.TestCase):
             "fortnite-image-editor": {
                 "preset": "fortnite_vertical_image.json",
                 "size": (1080, 1920),
-                "presets": {"fortnite_vertical_image.json", "fortnite_square_image.json"},
+                "presets": {
+                    "fortnite_vertical_image.json",
+                    "fortnite_square_image.json",
+                    "fortnite_horizontal_image.json",
+                },
             },
             "vertical-image-editor": {
                 "preset": "fortnite_vertical_image.json",
                 "size": (1080, 1920),
-                "presets": {"fortnite_vertical_image.json"},
+                "presets": {
+                    "fortnite_vertical_image.json",
+                    "fortnite_horizontal_image.json",
+                },
             },
             "square-image-editor": {
                 "preset": "fortnite_square_image.json",
                 "size": (1080, 1080),
-                "presets": {"fortnite_square_image.json"},
+                "presets": {
+                    "fortnite_square_image.json",
+                    "fortnite_horizontal_image.json",
+                },
             },
         }
         required_scripts = {
@@ -204,6 +214,7 @@ class ProjectIntegrityTests(unittest.TestCase):
                     self.assertTrue((skill_dir / "scripts" / script_name).is_file())
                 composer_text = (skill_dir / "scripts" / "compose_image.py").read_text(encoding="utf-8")
                 self.assertIn('choices=tuple(RESOLUTION_SCALES), default="4k"', composer_text)
+                self.assertIn("infer_output_format", composer_text)
                 link_script = (skill_dir / "scripts" / "edit_link.py").read_text(encoding="utf-8")
                 self.assertIn("SKILL_ROOT = Path(__file__).resolve().parents[1]", link_script)
                 self.assertIn('choices=("native", "4k"), default="4k"', link_script)
@@ -275,6 +286,8 @@ class ProjectIntegrityTests(unittest.TestCase):
                         "TITULAR",
                         "--bottom",
                         "CONTEXTO",
+                        "--format",
+                        "auto",
                         "--resolution",
                         "native",
                         "--backend",
@@ -299,13 +312,14 @@ class ProjectIntegrityTests(unittest.TestCase):
             self.assertTrue(summary["verification"]["ok"])
             self.assertTrue(output.is_file())
             with Image.open(output) as image:
-                self.assertEqual((image.width, image.height), (1080, 1920))
+                self.assertEqual((image.width, image.height), (1920, 1080))
 
     def test_presets_pass_the_canonical_validation(self):
         composer = load_composer_module()
         preset_paths = (
             BIN / "preset.json",
             BIN / "preset_square.json",
+            BIN / "preset_horizontal.json",
             SKILL_SPECS["vertical-image-editor"]["preset"],
             SKILL_SPECS["square-image-editor"]["preset"],
         )

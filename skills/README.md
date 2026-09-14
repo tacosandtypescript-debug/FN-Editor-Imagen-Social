@@ -13,9 +13,9 @@ original y no son las que debe elegir Hermes cuando encuentre las skills de
 
 | Skill | Versión | Entrada principal | Estado |
 | --- | --- | --- | --- |
-| `fortnite-image-editor` | 3.0.0 | `scripts/edit_link.py` | Dispatcher principal: decide vertical/cuadrada y exige descargar, componer, validar y entregar. |
-| `vertical-image-editor` | 3.0.0 | `scripts/edit_link.py` | Skill autocontenida para 9:16 / 1080×1920, compatible con Windows. |
-| `square-image-editor` | 3.0.0 | `scripts/edit_link.py` | Skill autocontenida para 1:1 / 1080×1080, compatible con Windows. |
+| `fortnite-image-editor` | 3.3.0 | `scripts/edit_link.py` | Dispatcher principal: decide automáticamente vertical, cuadrada u horizontal y exige descargar, componer, validar y entregar. |
+| `vertical-image-editor` | 3.3.0 | `scripts/edit_link.py` | Skill autocontenida para 9:16 / 1080×1920, compatible con Windows. |
+| `square-image-editor` | 3.3.0 | `scripts/edit_link.py` | Skill autocontenida para 1:1 / 1080×1080, compatible con Windows. |
 | `editar-publicar-instagram` | 2.0.0 | `SKILL.md` | Flujo documentado hacia el proyecto externo `igpub`; Linux-only, sin credenciales ni publicador local. |
 
 ## Contrato de integración
