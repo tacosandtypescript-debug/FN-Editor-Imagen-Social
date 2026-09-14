@@ -168,7 +168,20 @@ hermes skills trust
 hermes skills list
 ```
 
-El comando de uso es `/imagen <enlace-1> [enlace-2] ...`. Por ejemplo:
+El comando de uso es `/imagen <enlace-1> [enlace-2] ...`. En Hermes, escribir
+`/imagen` dentro de `SKILL.md` solo documenta el comando; para que Hermes lo
+registre como slash command hay que crear el bundle una vez:
+
+```text
+hermes bundles create imagen --skill fortnite-image-editor --description "Editor de imágenes sociales 4K"
+```
+
+Compruébalo con `hermes bundles list`. Si el bundle ya existe, usa `--force`
+para actualizarlo. Después de clonar el repositorio, confía el proyecto y crea
+este bundle en el perfil local de Hermes.
+
+Una vez registrado, el comando de uso es `/imagen <enlace-1> [enlace-2] ...`.
+Por ejemplo:
 
 ```text
 /imagen https://x.com/cuenta/status/123
@@ -182,7 +195,11 @@ orientación de sus imágenes. Se puede forzar `cuadrada`/`1:1`, `vertical`/`9:1
 u `horizontal`/`16:9`.
 
 Si Hermes ya tenía una sesión abierta, usa `/reset` o inicia una sesión nueva
-para reconstruir el índice. El CLI puede mostrar estas skills como `local`; en
+para reconstruir el índice. El alias `/imagen` también se puede comprobar con
+`/commands`. Como alternativa directa, la skill principal se puede invocar como
+`/fortnite-image-editor`.
+
+El CLI puede mostrar estas skills como `local`; en
 el prompt del agente las skills de proyecto se etiquetan como `[project]`.
 
 Las skills de Hermes exportan a 4K (`2160×3840` vertical, `2160×2160`
