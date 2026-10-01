@@ -35,6 +35,13 @@
       <h2>Bandeja de publicaciones</h2>
       <div class="row">
         <div style="min-width:190px">
+          <label for="filter-pending">Mostrar</label>
+          <select id="filter-pending">
+            <option value="1" selected>Solo pendientes (oculta procesadas)</option>
+            <option value="0">Todas, incluidas procesadas</option>
+          </select>
+        </div>
+        <div style="min-width:190px">
           <label for="filter-status">Estado</label>
           <select id="filter-status">
             <option value="todos">Todos</option>
@@ -45,6 +52,7 @@
             <option value="enviado">Enviado</option>
             <option value="descartado">Descartado</option>
             <option value="fallido">Fallido</option>
+            <option value="duplicado">Duplicado</option>
           </select>
         </div>
         <div style="min-width:190px">
@@ -52,7 +60,7 @@
           <select id="filter-account"><option value="">Todas</option></select>
         </div>
         <div style="min-width:190px">
-          <label for="filter-limit">Mostrar</label>
+          <label for="filter-limit">Cantidad</label>
           <select id="filter-limit">
             <option value="50">50</option>
             <option value="100" selected>100</option>
@@ -65,7 +73,9 @@
       <p class="small muted" style="margin-bottom:0">
         El sistema <strong>no</strong> convierte nada automáticamente: primero trae las
         publicaciones y tú eliges cuáles se convierten en tarjeta. La lista va de
-        <strong>más reciente a más antigua</strong>, agrupada por día.
+        <strong>más reciente a más antigua</strong>, agrupada por día. Lo que ya
+        procesaste desaparece de la vista, y cada publicación se recuerda para
+        <strong>no volver a aparecer</strong> aunque se limpie.
       </p>
     </div>
     <div id="inbox" class="feed"></div>
@@ -221,6 +231,39 @@
 
   <!-- ============ AJUSTES ============ -->
   <section id="tab-settings" hidden>
+    <div class="panel">
+      <h2>Análisis con IA (tu suscripción)</h2>
+      <p class="small muted" style="margin-top:0">
+        El proveedor preferido es el <strong>CLI de Codex</strong> que ya está
+        instalado y con sesión iniciada en este equipo: consume tu
+        <strong>suscripción de ChatGPT</strong>, no una clave de API de pago, y
+        devuelve JSON validado. Genera el titular de arriba, el texto de abajo y
+        <strong>los colores de las palabras</strong>.
+      </p>
+      <div id="chatgpt-state" class="row" style="margin-bottom:12px"></div>
+      <div class="row">
+        <button id="btn-analysis-test" class="accent">Probar análisis con una publicación</button>
+        <button id="btn-chatgpt-login" class="ghost">Abrir ventana de ChatGPT (alternativa)</button>
+      </div>
+      <div id="analysis-test-result" class="small" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Limpieza automática</h2>
+      <p class="small muted" style="margin-top:0">
+        Las publicaciones dejan de mostrarse al pasar el tiempo de retención, junto
+        con sus imágenes y tarjetas. <strong>No se olvidan</strong>: se guarda un
+        registro permanente de lo ya visto, así que no vuelven a aparecer como
+        nuevas en la siguiente búsqueda. Además se detecta la misma noticia
+        republicada con otro identificador.
+      </p>
+      <div id="maintenance-state" class="row" style="margin-bottom:12px"></div>
+      <div class="row">
+        <button id="btn-purge" class="accent">Limpiar ahora</button>
+      </div>
+      <div id="purge-result" class="small" style="margin-top:10px"></div>
+    </div>
+
     <div class="grid cols-2">
       <div class="panel">
         <h2>Proveedores</h2>

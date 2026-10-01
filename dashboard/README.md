@@ -312,6 +312,58 @@ desfase detectado y de dónde sale el huso.
 
 ---
 
+## No repetir publicaciones y limpieza a las 48 horas
+
+Aquí hay una trampa que conviene entender: **borrar una publicación de la
+bandeja no impide que vuelva**. La deduplicación se apoya justo en ese
+registro, así que si se borrara sin más, la siguiente búsqueda la insertaría
+otra vez como nueva y se repetiría *más*, no menos.
+
+Por eso hay dos capas separadas:
+
+| Capa | Qué guarda | Se borra |
+|---|---|---|
+| `seen_tweets` | Identificador, fecha, autor y huella. Unos 60 bytes por fila | **Nunca** |
+| `tweets` + archivos | Texto, medios, tarjeta y estado, lo que se ve | A las 48 h |
+
+Resultado: la bandeja se mantiene corta y ligera, y nada vuelve a aparecer.
+
+**Dos barreras contra las repeticiones:**
+
+1. **Identificador.** Si un post ya se vio alguna vez, no entra de nuevo — ni
+   siquiera después de haberse limpiado.
+2. **Contenido.** Se calcula una huella del texto (sin enlaces ni hashtags) más
+   el primer medio y el autor. Si otra publicación de la misma cuenta coincide
+   dentro de la ventana configurada, se guarda marcada como `duplicado` en
+   lugar de colarse como nueva.
+
+La huella exige un mínimo de texto cuando no hay imágenes: así dos
+publicaciones cortas iguales («GG», «🚨», «NUEVO») no se confunden entre sí.
+Y como incluye el autor, dos cuentas distintas contando lo mismo no se pisan.
+
+La limpieza corre sola después de cada sondeo (como mucho una vez por hora) y
+también a mano con **Limpiar ahora**. El estado se ve en **Estado y ajustes**.
+
+---
+
+## En el móvil
+
+La interfaz está adaptada para usarla desde el teléfono:
+
+- Una sola columna, con los filtros a ancho completo.
+- Campos de **16 px**, que es lo que evita que iOS haga zoom al enfocarlos y
+  descuadre la página.
+- Objetivos táctiles de 44 px y botones de cada publicación a lo ancho.
+- Cabecera y pestañas no fijas y deslizables, para no comerse la pantalla.
+- Miniaturas en tira deslizable lateral.
+- Márgenes de zona segura (`env(safe-area-inset-*)`) para los móviles con
+  notch, y toasts a lo ancho.
+
+Se entra con `python -m dashboard --lan` y abriendo desde el móvil la dirección
+con `?token=` que imprime al arrancar.
+
+---
+
 ## Límites conocidos
 
 - **Publicaciones sin imágenes.** El compositor canónico necesita al menos una

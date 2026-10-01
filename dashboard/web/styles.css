@@ -19,6 +19,8 @@
 
 * { box-sizing: border-box; }
 
+html { -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
   background: radial-gradient(1200px 600px at 80% -10%, #2a1a52 0%, var(--bg) 55%);
@@ -124,6 +126,17 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 .badge.enviado { background: #1c5232; color: #a6f7c8; }
 .badge.descartado { background: #3a3a44; color: #b9b9c6; }
 .badge.fallido { background: #5c1f2e; color: #ffb3c2; }
+.badge.duplicado { background: #33303d; color: #9d97b3; }
+
+/* Marca de «ya procesada»: se ve de un vistazo sin tener que leer el estado. */
+.tweet.processed { border-left: 3px solid var(--ok); }
+.tweet.processed .text { opacity: .78; }
+.tweet.is-duplicate { opacity: .62; border-left: 3px solid #4a4658; }
+.done-flag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: .3px;
+  color: var(--ok); text-transform: uppercase;
+}
 
 .tweet {
   border: 1px solid var(--line);
@@ -207,3 +220,89 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 
 details.help summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 code { background: #0d0a17; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+
+/* ==================================================================
+   Tabletas
+   ================================================================== */
+@media (max-width: 980px) {
+  main { padding: 12px 14px 70px; }
+  .grid.cols-2 { grid-template-columns: 1fr; }
+  /* La previsualización fija taparía la pantalla en vertical. */
+  .sticky-preview { position: static; }
+  header.top { padding: 10px 14px; gap: 10px; }
+  .editor-grid { grid-template-columns: 1fr; }
+}
+
+/* ==================================================================
+   Móvil
+   ================================================================== */
+@media (max-width: 700px) {
+  body {
+    font-size: 15px;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* iOS hace zoom al enfocar un campo de menos de 16px y descuadra la
+     página; con 16px se evita. */
+  input, select, textarea { font-size: 16px; padding: 10px 12px; }
+
+  /* Objetivos táctiles cómodos. */
+  button { min-height: 44px; padding: 10px 14px; }
+  button.small { min-height: 38px; padding: 8px 11px; }
+
+  /* La cabecera deja de ser fija: en vertical comería media pantalla. */
+  header.top { position: static; padding: 10px 12px; }
+  .brand h1 { font-size: 16px; }
+  .brand span { display: none; }
+  .spacer { display: none; }
+
+  /* Los indicadores de proveedor pasan a una tira deslizable. */
+  #provider-pills {
+    order: 3; width: 100%;
+    flex-wrap: nowrap; overflow-x: auto;
+    padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+  }
+  #provider-pills .pill { flex: 0 0 auto; }
+
+  /* Pestañas deslizables en vez de apiladas. */
+  nav.tabs { flex-wrap: nowrap; overflow-x: auto; padding: 10px 12px 0; -webkit-overflow-scrolling: touch; }
+  nav.tabs button { flex: 0 0 auto; }
+
+  main { padding: 10px 12px calc(72px + env(safe-area-inset-bottom)); }
+  .panel { padding: 13px; border-radius: 10px; }
+  .panel h2 { font-size: 13px; }
+
+  /* Un encabezado fijo por día estorba al desplazar en vertical. */
+  .feed-day { position: static; }
+
+  /* Los filtros van a ancho completo, uno por línea. */
+  .row > * { min-width: 0 !important; }
+  .row { gap: 8px; }
+
+  /* Miniaturas en tira deslizable lateral. */
+  .tweet .thumbs {
+    flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tweet .thumbs img { width: 108px; height: 108px; flex: 0 0 auto; }
+
+  /* Los botones de cada publicación ocupan el ancho y se apilan. */
+  .tweet .actions { gap: 6px; }
+  .tweet .actions button, .tweet .actions a {
+    flex: 1 1 auto; text-align: center;
+  }
+
+  .preview { min-height: 220px; }
+  .preview img { max-height: 46vh; }
+  .toast {
+    left: 12px; right: 12px; max-width: none;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .log { max-height: 300px; }
+}
+
+/* Móvil en horizontal: se aprovecha el ancho extra. */
+@media (max-width: 900px) and (orientation: landscape) {
+  .preview img { max-height: 70vh; }
+}

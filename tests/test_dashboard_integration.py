@@ -6,6 +6,7 @@ la entrega usan los proveedores que no necesitan credenciales.
 """
 
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -54,6 +55,13 @@ class DashboardIntegrationTests(unittest.TestCase):
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
 
+        # Los tests nunca deben invocar al CLI de Codex real: sería lento y
+        # consumiría la suscripción del usuario en cada ejecución.
+        key = "DASHBOARD_ANALYSIS_PROVIDER"
+        self._provider_before = os.environ.get(key)
+        os.environ[key] = "manual"
+        self.addCleanup(self._restore_provider, key)
+
         self.service = DashboardService(store=Store(config.DB_PATH))
         self.tweet_id = "2105562614461776336"
         self.service.store.upsert_tweets(
@@ -79,6 +87,12 @@ class DashboardIntegrationTests(unittest.TestCase):
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()
+
+    def _restore_provider(self, key):
+        if self._provider_before is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = self._provider_before
 
     # ------------------------------------------------------------------
     def test_prepare_card_renders_and_validates_output(self):
@@ -172,8 +186,114 @@ class DashboardIntegrationTests(unittest.TestCase):
             self.service.process_tweet("888")
         self.assertIn("no tiene imágenes", str(context.exception))
 
+    # --- análisis con IA al procesar -----------------------------------
+    def _use_provider(self, name):
+        """Fija el proveedor configurado durante el test."""
+        key = "DASHBOARD_ANALYSIS_PROVIDER"
+        original = os.environ.get(key)
+
+        def restore():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+        os.environ[key] = name
+        self.addCleanup(restore)
+
+    def test_process_reanalyses_when_the_stored_analysis_was_a_fallback(self):
+        """Lo pedido: al procesar debe analizar ChatGPT, no reusar el relleno."""
+        self.service.store.update_tweet(
+            self.tweet_id,
+            analysis_json={
+                "top": "RELLENO",
+                "bottom": "RELLENO",
+                "hashtags": ["#khetzalgg"],
+                "provider": "manual",
+            },
+            status="analizado",
+        )
+        self._use_provider("chatgpt")
+        captured = self._stub_analysis("NUEVO {TITULAR|FF7A00}", "NUEVO CONTEXTO")
+
+        result = self.service.process_tweet(
+            self.tweet_id, {"resolution": "native", "backend": "cpu"}
+        )
+
+        self.assertIn("análisis de texto", result["steps"])
+        self.assertIn("descarga de medios y composición", result["steps"])
+        self.assertEqual(captured["tweet"]["tweet_id"], self.tweet_id)
+        self.assertEqual(result["card"]["params"]["top"], "NUEVO {TITULAR|FF7A00}")
+
+    def test_process_does_not_repeat_an_analysis_from_the_active_provider(self):
+        """Evita repetir un análisis lento (el de ChatGPT tarda ~1 minuto)."""
+        self.service.store.update_tweet(
+            self.tweet_id,
+            analysis_json={
+                "top": "YA HECHO",
+                "bottom": "YA HECHO",
+                "hashtags": ["#khetzalgg"],
+                "provider": "chatgpt",
+            },
+            status="analizado",
+        )
+        self._use_provider("chatgpt")
+
+        def explode(*args, **kwargs):
+            raise AssertionError("no debería volver a analizar")
+
+        analysis_providers.analyse_tweet = explode
+        self.addCleanup(setattr, analysis_providers, "analyse_tweet", original_analyse)
+
+        result = self.service.process_tweet(
+            self.tweet_id, {"resolution": "native", "backend": "cpu"}
+        )
+        self.assertIn("análisis ya existente", result["steps"])
+        self.assertEqual(result["card"]["params"]["top"], "YA HECHO")
+
+    def test_force_analysis_overrides_the_cached_one(self):
+        self.service.store.update_tweet(
+            self.tweet_id,
+            analysis_json={"top": "VIEJO", "bottom": "VIEJO", "provider": "chatgpt"},
+            status="analizado",
+        )
+        self._use_provider("chatgpt")
+        self._stub_analysis("OTRA VEZ", "OTRA VEZ B")
+        result = self.service.process_tweet(
+            self.tweet_id, {"resolution": "native", "backend": "cpu"}, force_analysis=True
+        )
+        self.assertIn("análisis de texto", result["steps"])
+        self.assertEqual(result["card"]["params"]["top"], "OTRA VEZ")
+
+    def test_test_analysis_does_not_save_or_touch_the_card(self):
+        result = self.service.test_analysis(self.tweet_id, provider="manual")
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["analysis"]["top"])
+        # No se guardó análisis ni se creó tarjeta.
+        self.assertIsNone(self.service.get_tweet(self.tweet_id)["analysis"])
+        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
+
+    def test_test_analysis_reports_provider_failures(self):
+        def explode(*args, **kwargs):
+            raise analysis_providers.ProviderError("falta iniciar sesión en ChatGPT")
+
+        analysis_providers.analyse_tweet = explode
+        self.addCleanup(setattr, analysis_providers, "analyse_tweet", original_analyse)
+
+        with self.assertRaises(DashboardError) as context:
+            self.service.test_analysis(self.tweet_id, provider="chatgpt")
+        self.assertIn("iniciar sesión", str(context.exception))
+
+    def test_analysis_status_exposes_the_chatgpt_profile(self):
+        status = self.service.analysis_status()
+        self.assertIn("chatgpt", status["chatgpt_profile"])
+        self.assertIn(status["chatgpt_logged_in"], (True, False, None))
+        self.assertIn("codex_auth_mode", status)
+        names = {provider["name"] for provider in status["providers"]}
+        self.assertEqual(names, {"codex", "openai", "chatgpt", "manual"})
+
     # --- regenerar solo el texto --------------------------------------
-    def _stub_analysis(self, top, bottom, caption, hashtags=None):
+    def _stub_analysis(self, top, bottom, caption="", hashtags=None):
         """Sustituye el proveedor de análisis y captura lo que recibe."""
         captured = {}
 
@@ -343,6 +463,12 @@ class DashboardHttpTests(unittest.TestCase):
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
 
+        # Nunca se invoca al CLI de Codex real desde los tests.
+        key = "DASHBOARD_ANALYSIS_PROVIDER"
+        self._provider_before = os.environ.get(key)
+        os.environ[key] = "manual"
+        self.addCleanup(self._restore_provider, key)
+
         self.service = DashboardService(store=Store(config.DB_PATH))
         self.tweet_id = "1234567890"
         self.service.store.upsert_tweets(
@@ -374,6 +500,12 @@ class DashboardHttpTests(unittest.TestCase):
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()
+
+    def _restore_provider(self, key):
+        if self._provider_before is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = self._provider_before
 
     def call(self, method, path, body=None, raw=False):
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -505,13 +637,31 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(result["editor_url"], f"/editor.html?card={result['card']['id']}")
         self.assertIn("descarga de medios y composición", result["steps"])
 
-        # Y la bandeja ya ofrece el botón de abrir el editor.
-        status, listing = self.call("GET", "/api/tweets?status=todos&limit=5")
+        # Y la bandeja ya ofrece el botón de abrir el editor. Se pide
+        # `pending=0` porque por defecto lo ya procesado queda oculto.
+        status, listing = self.call("GET", f"/api/tweets?status=todos&limit=5&pending=0")
         tweet = listing["tweets"][0]
         self.assertTrue(tweet["has_card"])
         self.assertEqual(tweet["card_id"], result["card"]["id"])
+        self.assertTrue(tweet["is_processed"])
         self.assertTrue(tweet["posted_relative"])
         self.assertTrue(tweet["posted_absolute"])
+
+    def test_processed_publications_leave_the_pending_view(self):
+        """Lo procesado deja de estorbar en la vista por defecto."""
+        status, _ = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/process",
+            {"params": {"resolution": "native", "backend": "cpu"}},
+        )
+        self.assertEqual(status, 201)
+
+        status, pending = self.call("GET", "/api/tweets?status=todos&limit=10")
+        self.assertEqual(pending["tweets"], [], "ya no debería aparecer como pendiente")
+
+        status, everything = self.call("GET", "/api/tweets?status=todos&limit=10&pending=0")
+        self.assertEqual(len(everything["tweets"]), 1)
+        self.assertTrue(everything["tweets"][0]["is_processed"])
 
     def test_regenerate_text_endpoint_keeps_composition_settings(self):
         status, created = self.call(

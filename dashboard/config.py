@@ -141,6 +141,17 @@ class Settings:
     poll_on_start: bool = field(
         default_factory=lambda: _env_bool("DASHBOARD_POLL_ON_START", True)
     )
+    #: Horas que una publicación permanece visible en la bandeja. Al pasar ese
+    #: tiempo se borra junto con sus archivos, pero **el registro de «ya vista»
+    #: se conserva**, así que no vuelve a aparecer como nueva.
+    retention_hours: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_RETENTION_HOURS", 48)
+    )
+    #: Días durante los que se recuerda la huella del contenido para detectar
+    #: la misma noticia republicada con otro identificador.
+    duplicate_window_days: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_DUPLICATE_WINDOW_DAYS", 7)
+    )
     nitter_instances: tuple[str, ...] = field(
         default_factory=lambda: _env_list("DASHBOARD_NITTER_INSTANCES", DEFAULT_NITTER_INSTANCES)
     )
@@ -163,7 +174,7 @@ class Settings:
 
     # --- Análisis / redacción -----------------------------------------
     analysis_provider: str = field(
-        default_factory=lambda: _env("DASHBOARD_ANALYSIS_PROVIDER", "openai")
+        default_factory=lambda: _env("DASHBOARD_ANALYSIS_PROVIDER", "codex")
     )
     openai_base_url: str = field(
         default_factory=lambda: _env("DASHBOARD_OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -174,6 +185,12 @@ class Settings:
     )
     analysis_timeout_seconds: int = field(
         default_factory=lambda: _env_int("DASHBOARD_ANALYSIS_TIMEOUT", 120)
+    )
+    #: CLI de Codex: ruta explícita (si se deja vacío se busca solo).
+    codex_path: str = field(default_factory=lambda: _env("DASHBOARD_CODEX_PATH", ""))
+    codex_model: str = field(default_factory=lambda: _env("DASHBOARD_CODEX_MODEL", ""))
+    codex_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_CODEX_TIMEOUT", 240)
     )
 
     # --- Telegram ------------------------------------------------------
@@ -275,6 +292,8 @@ def redacted(settings: Settings) -> dict:
         "timeline_provider": settings.timeline_provider,
         "poll_interval_seconds": settings.poll_interval_seconds,
         "poll_on_start": settings.poll_on_start,
+        "retention_hours": settings.retention_hours,
+        "duplicate_window_days": settings.duplicate_window_days,
         "nitter_instances": list(settings.nitter_instances),
         "browser_headless": settings.browser_headless,
         "browser_channel": settings.browser_channel,

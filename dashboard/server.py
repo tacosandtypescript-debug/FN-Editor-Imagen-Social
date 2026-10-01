@@ -24,11 +24,16 @@ from .service import DashboardError, DashboardService
 ROUTES = (
     ("GET", re.compile(r"^/api/state$"), "get_state"),
     ("GET", re.compile(r"^/api/events$"), "get_events"),
+    ("GET", re.compile(r"^/api/analysis/status$"), "get_analysis_status"),
+    ("POST", re.compile(r"^/api/analysis/test$"), "post_analysis_test"),
+    ("POST", re.compile(r"^/api/profiles/chatgpt/open$"), "post_chatgpt_login"),
     ("GET", re.compile(r"^/api/accounts$"), "get_accounts"),
     ("POST", re.compile(r"^/api/accounts$"), "post_account"),
     ("POST", re.compile(r"^/api/accounts/([^/]+)/active$"), "post_account_active"),
     ("DELETE", re.compile(r"^/api/accounts/([^/]+)$"), "delete_account"),
     ("POST", re.compile(r"^/api/poll$"), "post_poll"),
+    ("POST", re.compile(r"^/api/maintenance/purge$"), "post_maintenance_purge"),
+    ("GET", re.compile(r"^/api/maintenance$"), "get_maintenance"),
     ("GET", re.compile(r"^/api/tweets$"), "get_tweets"),
     ("GET", re.compile(r"^/api/tweets/(\d+)$"), "get_tweet"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/status$"), "post_tweet_status"),
@@ -248,6 +253,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         limit = _int_param(query, "limit", 60)
         self._send_json({"events": self.service.events(limit)})
 
+    def get_analysis_status(self, query, *groups) -> None:
+        self._send_json(self.service.analysis_status())
+
+    def post_analysis_test(self, query, *groups) -> None:
+        """Prueba el proveedor de análisis sin guardar nada."""
+        payload = self._read_json()
+        tweet_id = str(payload.get("tweet_id") or "").strip()
+        if not tweet_id:
+            raise DashboardError("falta el identificador de la publicación")
+        self._send_json(self.service.test_analysis(tweet_id, payload.get("provider") or None))
+
+    def post_chatgpt_login(self, query, *groups) -> None:
+        """Abre la ventana de Chrome con el perfil de ChatGPT para entrar."""
+        self._send_json(self.service.open_chatgpt_login())
+
     def get_accounts(self, query, *groups) -> None:
         self._send_json({"accounts": self.service.store.list_accounts()})
 
@@ -290,10 +310,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
         handle = _first(query, "handle") or None
         limit = _int_param(query, "limit", 200)
         offset = _int_param(query, "offset", 0)
+        # Por defecto solo se muestra lo pendiente: lo ya procesado y lo
+        # duplicado dejan de estorbar.
+        pending_only = _first(query, "pending") != "0"
         tweets = self.service.list_tweets(
-            status=status, source_handle=handle, limit=limit, offset=offset
+            status=status,
+            source_handle=handle,
+            pending_only=pending_only,
+            limit=limit,
+            offset=offset,
         )
         self._send_json({"tweets": tweets, "counts": self.service.store.count_by_status()})
+
+    def get_maintenance(self, query, *groups) -> None:
+        self._send_json(self.service.maintenance_state())
+
+    def post_maintenance_purge(self, query, *groups) -> None:
+        """Borra de la bandeja lo anterior a la retención configurada."""
+        payload = self._read_json()
+        result = self.service.maintenance(force=bool(payload.get("force", True)))
+        self._send_json(result)
 
     def get_tweet(self, query, tweet_id: str) -> None:
         tweet = self.service.get_tweet(tweet_id)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -54,12 +55,16 @@ Formato exacto de la respuesta:
 Reglas obligatorias:
 - "top" es el titular: 3 a 12 palabras, en mayúsculas, sin punto final.
 - "bottom" es el contexto: breve, puede incluir la fecha con formato · DD/MM.
-- Para destacar una palabra escribe exactamente {PALABRA|HEX}.
-- Usa como máximo DOS palabras resaltadas en total (una en "top", otra en "bottom").
+- COLOREA SIEMPRE LAS PALABRAS: resalta exactamente UNA palabra en "top" y UNA
+  palabra en "bottom". No es opcional.
+- Para resaltar una palabra, escríbela así: {PALABRA|HEX}
+  Ejemplo de "top": FORTNITEMARES VUELVE CON {MAPA|FF7A00} NUEVO
 - Colores permitidos, solo estos: __PALETTE__.
+  Elige el color por contraste con el contenido; no repitas siempre el mismo.
 - NUNCA resaltes palabras funcionales: de, del, la, las, lo, los, el, un, una,
   unos, unas, a, al, ante, bajo, con, contra, desde, e, en, entre, hacia,
   hasta, o, u, para, por, que, se, sin, sobre, y.
+- No resaltes más de dos palabras en total.
 - "hashtags": EXACTAMENTE cinco etiquetas únicas, en minúsculas, y una de ellas
   debe ser #khetzalgg.
 - "suggested_format" debe ser uno de: __FORMATS__, según la orientación de las
@@ -183,12 +188,20 @@ class BrowserChatGPTAnalysis:
     """
 
     name = "chatgpt"
-    PROMPT_SELECTOR = "#prompt-textarea, div[contenteditable='true']"
-    SEND_SELECTOR = "[data-testid='send-button'], button[aria-label*='Enviar'], button[aria-label*='Send']"
+    PROMPT_SELECTOR = "#prompt-textarea, div[contenteditable='true'], textarea[placeholder]"
+    SEND_SELECTOR = (
+        "[data-testid='send-button'], button[data-testid='composer-send-button'], "
+        "button[aria-label*='Enviar'], button[aria-label*='Send'], button[aria-label*='enviar']"
+    )
     REPLY_SELECTOR = "[data-message-author-role='assistant']"
+    URL = "https://chatgpt.com/"
 
     def __init__(self) -> None:
         self.settings = config.Settings()
+
+    @property
+    def profile(self) -> Path:
+        return config.PROFILES_DIR / "chatgpt"
 
     def status(self) -> ProviderStatus:
         try:
@@ -197,16 +210,85 @@ class BrowserChatGPTAnalysis:
             return ProviderStatus(
                 self.name, False, "requiere Playwright (requirements-dashboard.txt)"
             )
-        profile = config.PROFILES_DIR / "chatgpt"
+        if self.profile_logged_in() is False:
+            return ProviderStatus(
+                self.name,
+                False,
+                "falta iniciar sesión en el perfil de ChatGPT; usa el botón "
+                "«Abrir ventana de ChatGPT»",
+            )
         return ProviderStatus(
             self.name,
             True,
-            f"experimental: usa tu sesión en el perfil {profile}; inicia sesión una vez",
+            "usa tu propia sesión de chatgpt.com (consume tu suscripción, no la API)",
         )
 
+    # -- sesión ---------------------------------------------------------
+    def profile_logged_in(self) -> bool | None:
+        """Marca si el perfil parece tener sesión iniciada.
+
+        Devuelve `None` cuando todavía no se puede saber (nunca se ha abierto).
+        """
+        marker = self.profile / "Default" / "Cookies"
+        if not self.profile.exists():
+            return None
+        return marker.exists()
+
+    def open_login_window(self, url: str | None = None) -> dict:
+        """Abre Chrome con el perfil para iniciar sesión a mano, sin bloquear.
+
+        El proceso se lanza suelto: la ventana queda abierta para que el
+        usuario entre con su cuenta y el dashboard la reutiliza después.
+        """
+        import subprocess
+
+        ok, detail = self.status_playwright()
+        if not ok:
+            raise ProviderError(detail)
+
+        from playwright.sync_api import sync_playwright
+
+        profile = self.profile
+        profile.mkdir(parents=True, exist_ok=True)
+        target = url or self.URL
+        # Se abre con el binario de Chrome y `--user-data-dir` para que la
+        # ventana sobreviva a esta petición.
+        try:
+            from playwright.sync_api import sync_playwright as _sync
+
+            with _sync() as playwright:
+                executable = playwright.chromium.executable_path
+        except Exception:  # noqa: BLE001
+            executable = None
+
+        command = [
+            self.settings.browser_channel or "chrome",
+        ]
+        if executable and not Path(str(executable)).name.lower().startswith("chrome"):
+            command = [str(executable)]
+        command += [f"--user-data-dir={profile}", "--new-window", target]
+        try:
+            subprocess.Popen(command, close_fds=True)  # noqa: S603 - ruta controlada
+        except OSError as exc:
+            raise ProviderError(
+                f"no se pudo abrir Chrome para iniciar sesión: {exc}. "
+                f"Abre manualmente el perfil: {profile}"
+            ) from exc
+        return {"opened": True, "url": target, "profile": str(profile)}
+
+    @staticmethod
+    def status_playwright() -> tuple[bool, str]:
+        try:
+            import playwright.sync_api  # noqa: F401
+        except ImportError:
+            return False, "Playwright no está instalado (requirements-dashboard.txt)"
+        return True, "ok"
+
+    # -- análisis -------------------------------------------------------
     def analyse(self, tweet: dict) -> Analysis:
-        if not self.status().available:
-            raise ProviderError(self.status().detail)
+        ok, detail = self.status_playwright()
+        if not ok:
+            raise ProviderError(detail)
 
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -218,7 +300,7 @@ class BrowserChatGPTAnalysis:
             + "\n\n--- PUBLICACIÓN ---\n"
             + build_user_prompt(tweet, palette)
         )
-        profile = config.PROFILES_DIR / "chatgpt"
+        profile = self.profile
         profile.mkdir(parents=True, exist_ok=True)
 
         with _BROWSER_LOCK:
@@ -234,45 +316,62 @@ class BrowserChatGPTAnalysis:
                     try:
                         page = context.pages[0] if context.pages else context.new_page()
                         page.goto(
-                            "https://chatgpt.com/",
-                            wait_until="domcontentloaded",
+                            self.URL, wait_until="domcontentloaded",
                             timeout=self.settings.browser_timeout_ms,
                         )
-                        page.wait_for_timeout(4000)
+                        page.wait_for_timeout(4500)
+
+                        if _chatgpt_asks_for_login(page):
+                            raise ProviderError(self._login_hint(profile))
+
                         box = page.locator(self.PROMPT_SELECTOR).first
                         try:
-                            box.wait_for(timeout=15000)
+                            box.wait_for(timeout=20000)
                         except PlaywrightTimeout as exc:
+                            raise ProviderError(self._login_hint(profile)) from exc
+
+                        # Se cuenta lo que ya había antes de enviar: con un
+                        # perfil persistente puede haber conversaciones
+                        # anteriores y no queremos leer una respuesta vieja.
+                        before = _assistant_count(page, self.REPLY_SELECTOR)
+
+                        _write_prompt(page, box, prompt)
+                        if not _send(page, self.SEND_SELECTOR):
                             raise ProviderError(
-                                "chatgpt.com no mostró la caja de escritura: lo más "
-                                "probable es que la sesión no esté iniciada en el perfil "
-                                f"{profile}. Ábrelo una vez, inicia sesión y reinténtalo."
-                            ) from exc
-                        box.click()
-                        box.fill(prompt) if _is_fillable(box) else box.type(prompt)
-                        send = page.locator(self.SEND_SELECTOR).first
-                        if send.count() and send.is_enabled():
-                            send.click()
-                        else:
-                            page.keyboard.press("Enter")
-                        reply = _wait_for_reply(page, self.REPLY_SELECTOR, self.settings.analysis_timeout_seconds)
+                                "no se pudo enviar el mensaje en chatgpt.com; "
+                                "la interfaz puede haber cambiado"
+                            )
+                        reply = _wait_for_new_reply(
+                            page,
+                            self.REPLY_SELECTOR,
+                            before,
+                            self.settings.analysis_timeout_seconds,
+                        )
                     finally:
                         context.close()
+            except ProviderError:
+                raise
             except PlaywrightTimeout as exc:
                 raise ProviderError(f"chatgpt.com no respondió a tiempo: {exc}") from exc
             except PlaywrightError as exc:
                 raise ProviderError(
                     "el navegador no pudo completar el análisis en chatgpt.com: "
-                    f"{str(exc)[:300]}. Comprueba que has iniciado sesión en el perfil "
-                    f"{profile}."
+                    f"{str(exc)[:300]}. {self._login_hint(profile)}"
                 ) from exc
 
         if not reply:
             raise ProviderError(
-                "no se pudo leer la respuesta de ChatGPT. Inicia sesión en el perfil "
-                f"{profile} y vuelve a intentarlo."
+                "ChatGPT no devolvió respuesta en el tiempo esperado. "
+                f"{self._login_hint(profile)}"
             )
         return analysis_from_payload(reply, provider=self.name)
+
+    def _login_hint(self, profile: Path) -> str:
+        return (
+            "Parece que no hay sesión iniciada en el perfil de ChatGPT. Pulsa "
+            "«Abrir ventana de ChatGPT» en la pestaña Estado y ajustes, entra "
+            f"con tu cuenta y vuelve a intentarlo (perfil: {profile})."
+        )
 
 
 # ----------------------------------------------------------------------
@@ -448,7 +547,11 @@ def date_context(tweet: dict) -> str:
 # Registro
 # ----------------------------------------------------------------------
 def build_provider(name: str):
-    chosen = (name or "openai").strip().lower()
+    chosen = (name or "codex").strip().lower()
+    if chosen in {"codex", "cli"}:
+        from .codex_cli import CodexCliAnalysis
+
+        return CodexCliAnalysis()
     if chosen in {"openai", "api", "local"}:
         return OpenAICompatibleAnalysis()
     if chosen in {"chatgpt", "browser"}:
@@ -461,7 +564,7 @@ def build_provider(name: str):
 def analyse_tweet(tweet: dict, preferred: str | None = None) -> dict:
     """Analiza una publicación y devuelve el resultado saneado."""
     settings = config.Settings()
-    chosen = (preferred or settings.analysis_provider or "openai").strip().lower()
+    chosen = (preferred or settings.analysis_provider or "codex").strip().lower()
     provider = build_provider(chosen)
     status = provider.status()
     if not status.available:
@@ -476,7 +579,10 @@ def analyse_tweet(tweet: dict, preferred: str | None = None) -> dict:
 
 
 def available_providers() -> list[ProviderStatus]:
+    from .codex_cli import CodexCliAnalysis
+
     return [
+        CodexCliAnalysis().status(),
         OpenAICompatibleAnalysis().status(),
         BrowserChatGPTAnalysis().status(),
         ManualAnalysis().status(),
@@ -584,25 +690,95 @@ def _read_error(exc: HTTPError) -> str:
         return "sin detalle"
 
 
-def _is_fillable(locator) -> bool:
+def _chatgpt_asks_for_login(page) -> bool:
+    """Detecta la pantalla de acceso para dar un mensaje útil en vez de un timeout."""
     try:
-        return locator.evaluate("el => el.tagName.toLowerCase() === 'textarea'")
+        url = (page.url or "").lower()
+    except Exception:  # noqa: BLE001
+        url = ""
+    if "/auth/" in url or "login" in url:
+        return True
+    try:
+        if page.locator(BrowserChatGPTAnalysis.PROMPT_SELECTOR).count() > 0:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        body = (page.inner_text("body") or "")[:3000].lower()
+    except Exception:  # noqa: BLE001
+        return False
+    markers = ("log in", "iniciar sesión", "sign up", "crear una cuenta", "regístrate")
+    return any(marker in body for marker in markers)
+
+
+def _assistant_count(page, selector: str) -> int:
+    """Cuántas respuestas del asistente hay ya en la página."""
+    try:
+        return page.locator(selector).count()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _write_prompt(page, box, prompt: str) -> None:
+    """Escribe el prompt en la caja de chatgpt.com.
+
+    `fill` es lo rápido y dispara los eventos que React necesita; si no deja
+    texto, se recurre a `insert_text`, que también los dispara, y solo como
+    último recurso se teclea carácter a carácter.
+    """
+    box.click()
+    try:
+        box.fill(prompt)
+    except Exception:  # noqa: BLE001 - algunos editores no admiten fill
+        pass
+
+    written = ""
+    try:
+        written = (box.inner_text() or "").strip()
+    except Exception:  # noqa: BLE001
+        written = ""
+    if len(written) < 10:
+        try:
+            page.keyboard.insert_text(prompt)
+        except Exception:  # noqa: BLE001
+            box.type(prompt)
+
+
+def _send(page, selector: str) -> bool:
+    """Pulsa enviar; si el botón no está disponible, usa Intro."""
+    try:
+        button = page.locator(selector).first
+        if button.count():
+            for _ in range(20):
+                if button.is_enabled():
+                    button.click()
+                    return True
+                page.wait_for_timeout(300)
+    except Exception:  # noqa: BLE001 - se intenta con Intro
+        pass
+    try:
+        page.keyboard.press("Enter")
+        return True
     except Exception:  # noqa: BLE001
         return False
 
 
-def _wait_for_reply(page, selector: str, timeout_seconds: int) -> str:
-    """Espera a que ChatGPT termine de escribir y devuelve su respuesta."""
+def _wait_for_new_reply(page, selector: str, known_count: int, timeout_seconds: int) -> str:
+    """Espera una respuesta **nueva** y la devuelve cuando deja de cambiar.
+
+    Se compara con las respuestas que ya había: con un perfil persistente la
+    conversación anterior sigue en pantalla y no se debe leer esa.
+    """
     import time
 
-    deadline = time.time() + max(30, int(timeout_seconds))
+    deadline = time.time() + max(60, int(timeout_seconds))
     last_text = ""
     stable_rounds = 0
     while time.time() < deadline:
         try:
             nodes = page.locator(selector)
             count = nodes.count()
-            if count:
+            if count > known_count:
                 current = nodes.nth(count - 1).inner_text()
                 if current and current == last_text:
                     stable_rounds += 1

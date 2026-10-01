@@ -52,6 +52,8 @@ class DashboardService:
             "delivery_providers": [status.__dict__ for status in telegram_providers.available_providers()],
             "profiles": timeline_providers.profile_directories(),
             "clock": self.clock_status(),
+            "analysis_status": self.analysis_status(),
+            "maintenance": self.maintenance_state(),
             "events": self.store.recent_events(40),
         }
 
@@ -188,11 +190,18 @@ class DashboardService:
 
         if progress is not None:
             progress.update({"current": None, "running": False})
+        # Tras cada sondeo se aprovecha para limpiar lo que ya caducó.
+        purge = self.maintenance()
         self.store.log(
             f"Sondeo terminado: {total_new} publicación(es) nueva(s) en {len(accounts)} cuenta(s) "
             f"vía {provider_name}"
         )
-        return {"accounts": results, "new": total_new, "provider": provider_name}
+        return {
+            "accounts": results,
+            "new": total_new,
+            "provider": provider_name,
+            "purge": purge,
+        }
 
     def _record_success(
         self,
@@ -202,13 +211,18 @@ class DashboardService:
         attempts: list[dict] | None = None,
     ) -> dict:
         latest = max((tweet["tweet_id"] for tweet in tweets), default=None)
-        # Se enriquecen solo las que aún no están en la base de datos.
-        known = {tweet["tweet_id"] for tweet in self.store.list_tweets(limit=1000)}
-        fresh = [tweet for tweet in tweets if tweet["tweet_id"] not in known][:ENRICH_LIMIT]
+        # Se enriquecen solo las que nunca se han visto: el registro permanente
+        # evita repetir consultas a los mirrors tras una limpieza.
+        unseen = set(self.store.filter_unseen(tweet["tweet_id"] for tweet in tweets))
+        fresh = [tweet for tweet in tweets if tweet["tweet_id"] in unseen][:ENRICH_LIMIT]
         self._enrich(fresh)
 
-        result = self.store.upsert_tweets(tweets)
+        settings = config.Settings()
+        result = self.store.upsert_tweets(
+            tweets, duplicate_window_days=settings.duplicate_window_days
+        )
         inserted = len(result["inserted"])
+        repeated = len(result["content_duplicates"])
         self.store.mark_account_checked(
             handle, error=None, last_post_id=str(latest) if latest else None
         )
@@ -217,8 +231,9 @@ class DashboardService:
             note = " (con respaldo: " + "; ".join(
                 f"{item['provider']} falló" for item in attempts
             ) + ")"
+        replay = f", {repeated} repetida(s) por contenido" if repeated else ""
         self.store.log(
-            f"@{handle}: {inserted} nueva(s), {result['duplicates']} ya conocida(s) "
+            f"@{handle}: {inserted} nueva(s), {result['duplicates']} ya vista(s){replay} "
             f"vía {provider_name}{note}"
         )
         return {
@@ -226,6 +241,7 @@ class DashboardService:
             "ok": True,
             "new": inserted,
             "duplicates": result["duplicates"],
+            "content_duplicates": repeated,
             "total_seen": len(tweets),
             "provider": provider_name,
             "attempts": attempts or [],
@@ -275,6 +291,49 @@ class DashboardService:
                 tweet["editor_url"] = f"/editor.html?card={card_id}"
         return tweets
 
+    def maintenance(self, force: bool = False) -> dict:
+        """Limpia la bandeja según la retención configurada.
+
+        Borra las publicaciones más antiguas que `retention_hours` junto con sus
+        medios y tarjetas. **No** toca el registro de «ya vistas»: por eso una
+        publicación limpiada no reaparece en la siguiente búsqueda.
+        """
+        settings = config.Settings()
+        if not force and not self._purge_due(settings.retention_hours):
+            return {"skipped": True, "reason": "todavía no toca limpiar"}
+
+        outcome = self.store.purge_older_than(settings.retention_hours, config.MEDIA_DIR)
+        self.store.set_setting("last_purge_at", self.now().replace(microsecond=0).isoformat())
+        if outcome["purged"]:
+            self.store.log(
+                f"Limpieza: {outcome['purged']} publicación(es) de más de "
+                f"{settings.retention_hours} h, {outcome['files_removed']} archivo(s) borrados. "
+                f"Se recuerdan {outcome['seen_kept']} vistas para no repetirlas."
+            )
+        return outcome
+
+    def _purge_due(self, retention_hours: int) -> bool:
+        """Como mucho una limpieza por hora, para no repetirla en cada sondeo."""
+        last = self.store.get_setting("last_purge_at")
+        if not last:
+            return True
+        moment = timefmt.parse_moment(last)
+        if moment is None:
+            return True
+        return (self.now() - moment).total_seconds() >= 3600
+
+    def maintenance_state(self) -> dict:
+        settings = config.Settings()
+        seen = self.store.seen_stats()
+        return {
+            "retention_hours": settings.retention_hours,
+            "duplicate_window_days": settings.duplicate_window_days,
+            "last_purge_at": self.store.get_setting("last_purge_at"),
+            "total_seen": seen["total_seen"],
+            "oldest_seen_at": seen["oldest_seen_at"],
+            "purge_due": self._purge_due(settings.retention_hours),
+        }
+
     def get_tweet(self, tweet_id: str) -> dict:
         tweet = self.store.get_tweet(tweet_id)
         if not tweet:
@@ -309,22 +368,41 @@ class DashboardService:
         tweet_id: str,
         params: dict | None = None,
         provider: str | None = None,
+        force_analysis: bool = False,
     ) -> dict:
         """Prepara una publicación de principio a fin, en un solo paso.
 
         Es lo que dispara el botón «Procesar»: analiza si todavía no hay
         análisis, descarga los medios y compone la tarjeta. Deja el resultado
         listo para abrir en el editor independiente.
+
+        El análisis se rehace cuando el guardado es de relleno (`manual`) o de
+        otro proveedor distinto del configurado: si no, un análisis antiguo
+        hecho sin IA impediría que ChatGPT redactara los textos y los colores.
         """
         tweet = self.get_tweet(tweet_id)
         if not tweet.get("media"):
             raise DashboardError(
                 "la publicación no tiene imágenes: el compositor necesita al menos una"
             )
+
         done: list[str] = []
-        if not tweet.get("analysis"):
+        existing = tweet.get("analysis") or {}
+        current = str(existing.get("provider") or "").strip().lower()
+        configured = (
+            provider or config.Settings().analysis_provider or ""
+        ).strip().lower()
+        needs_analysis = (
+            force_analysis
+            or not existing
+            or current in {"", "manual"}
+            or (configured and current != configured)
+        )
+        if needs_analysis:
             self.analyse(tweet_id, provider)
             done.append("análisis de texto")
+        else:
+            done.append("análisis ya existente")
 
         card = self.prepare_card(tweet_id, params)
         done.append("descarga de medios y composición")
@@ -334,6 +412,49 @@ class DashboardService:
             "tweet": self.get_tweet(tweet_id),
             "steps": done,
             "editor_url": f"/editor.html?card={card['id']}",
+        }
+
+    def test_analysis(self, tweet_id: str, provider: str | None = None) -> dict:
+        """Prueba el análisis sin guardarlo ni tocar la tarjeta.
+
+        Sirve para comprobar que el proveedor responde (por ejemplo, que la
+        sesión de ChatGPT está iniciada) antes de procesar nada.
+        """
+        tweet = self.get_tweet(tweet_id)
+        try:
+            result = analysis_providers.analyse_tweet(tweet, provider)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)[:500]
+            self.store.log(f"Prueba de análisis fallida: {message}", level="error", tweet_id=tweet_id)
+            raise DashboardError(message) from exc
+        self.store.log(
+            f"Prueba de análisis correcta con {result.get('provider')}", tweet_id=tweet_id
+        )
+        return {"analysis": result, "tweet_id": tweet_id, "saved": False}
+
+    def open_chatgpt_login(self) -> dict:
+        """Abre una ventana de Chrome con el perfil de ChatGPT para entrar."""
+        provider = analysis_providers.BrowserChatGPTAnalysis()
+        try:
+            outcome = provider.open_login_window()
+        except Exception as exc:  # noqa: BLE001
+            raise DashboardError(str(exc)[:400]) from exc
+        self.store.log("Ventana de ChatGPT abierta para iniciar sesión")
+        return outcome
+
+    def analysis_status(self) -> dict:
+        """Estado de los proveedores de análisis, para la interfaz."""
+        from .providers import codex_cli
+
+        provider = analysis_providers.BrowserChatGPTAnalysis()
+        executable = codex_cli.find_codex_executable()
+        return {
+            "chatgpt_profile": str(provider.profile),
+            "chatgpt_logged_in": provider.profile_logged_in(),
+            "codex_executable": executable,
+            "codex_auth_mode": codex_cli.auth_mode(),
+            "codex_candidates": codex_cli.candidate_paths()[:5],
+            "providers": [status.__dict__ for status in analysis_providers.available_providers()],
         }
 
     # ------------------------------------------------------------------
@@ -482,6 +603,7 @@ class DashboardService:
                 tweet_id, stored_params, output_path=result["output"], meta=meta
             )
         self.store.set_tweet_status(tweet_id, "tarjeta_lista")
+        self.store.mark_processed(tweet_id)
         self.store.log(
             f"Tarjeta v{card['version']} generada para {tweet_id} "
             f"({result['width']}x{result['height']})",

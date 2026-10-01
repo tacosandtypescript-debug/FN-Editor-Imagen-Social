@@ -89,6 +89,8 @@ async function loadState() {
   renderAccounts(state.accounts);
   renderProviders(state);
   renderSettings(state.settings);
+  renderAnalysisStatus(state);
+  renderMaintenance(state);
   renderEvents(state.events);
   renderAnalysisOptions(state.analysis_providers);
   renderStyleOptions();
@@ -171,6 +173,119 @@ function renderProviders(state) {
     );
   }
   $("providers").innerHTML = rows.join("");
+}
+
+function renderAnalysisStatus(state) {
+  const box = $("chatgpt-state");
+  if (!box) return;
+  const info = state.analysis_status || {};
+  const configured = (state.settings && state.settings.analysis_provider) || "";
+  const codex = (info.providers || []).find((provider) => provider.name === "codex") || {};
+  const logged = info.chatgpt_logged_in;
+
+  const codexBadge = codex.available
+    ? `<span class="pill ok"><span class="dot"></span>CLI de Codex listo</span>`
+    : `<span class="pill warn"><span class="dot"></span>CLI de Codex no disponible</span>`;
+  const authBadge = info.codex_auth_mode === "chatgpt"
+    ? `<span class="pill ok">suscripción de ChatGPT</span>`
+    : info.codex_auth_mode
+      ? `<span class="pill warn">modo ${escapeHtml(info.codex_auth_mode)}</span>`
+      : `<span class="pill off">sin sesión</span>`;
+  const webBadge = logged === true
+    ? `<span class="pill ok">navegador: sesión iniciada</span>`
+    : `<span class="pill off">navegador: sin sesión</span>`;
+
+  box.innerHTML =
+    `<span class="pill ${configured === "codex" ? "ok" : ""}">proveedor activo: ${escapeHtml(configured || "—")}</span>` +
+    codexBadge + authBadge + webBadge +
+    `<span class="small muted">${escapeHtml(codex.detail || "")}</span>` +
+    (info.codex_executable
+      ? `<span class="small muted">ejecutable: <code>${escapeHtml(info.codex_executable)}</code></span>`
+      : "");
+}
+
+async function openChatgptLogin() {
+  const button = $("btn-chatgpt-login");
+  await withBusy(button, "Abriendo…", async () => {
+    try {
+      const result = await api("/api/profiles/chatgpt/open", { method: "POST", body: "{}" });
+      toast("Ventana de ChatGPT abierta. Inicia sesión ahí y vuelve a esta página.");
+      $("analysis-test-result").innerHTML =
+        `<span class="pill ok">ventana abierta</span> Inicia sesión en la ventana de Chrome ` +
+        `y después pulsa «Probar análisis». Perfil: <code>${escapeHtml(result.profile || "")}</code>`;
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function testAnalysis() {
+  const button = $("btn-analysis-test");
+  // Se usa la publicación más reciente que tenga imágenes.
+  const candidate = (app.tweets || []).find((tweet) => (tweet.media || []).length);
+  if (!candidate) {
+    return toast("No hay ninguna publicación con imágenes para probar.", "error");
+  }
+  await withBusy(button, "Probando…", async () => {
+    try {
+      const payload = await api("/api/analysis/test", {
+        method: "POST",
+        body: JSON.stringify({
+          tweet_id: candidate.tweet_id,
+          provider: ($("f-analysis") && $("f-analysis").value) || null,
+        }),
+      });
+      const analysis = payload.analysis || {};
+      $("analysis-test-result").innerHTML =
+        `<span class="pill ok">${escapeHtml(analysis.provider || "")}</span> ` +
+        `<strong>titular:</strong> ${escapeHtml(analysis.top || "")}<br>` +
+        `<strong>contexto:</strong> ${escapeHtml(analysis.bottom || "")}<br>` +
+        `<strong>hashtags:</strong> ${escapeHtml((analysis.hashtags || []).join(" "))}<br>` +
+        `<span class="muted">${escapeHtml(analysis.reasoning || "")}</span>`;
+      toast("El análisis funciona.");
+    } catch (error) {
+      $("analysis-test-result").innerHTML =
+        `<span class="pill off">error</span> ${escapeHtml(error.message)}`;
+      toast(error.message, "error");
+    }
+  });
+}
+
+function renderMaintenance(state) {
+  const box = $("maintenance-state");
+  if (!box) return;
+  const info = state.maintenance || {};
+  const hours = info.retention_hours;
+  const due = info.purge_due
+    ? `<span class="pill warn">toca limpiar</span>`
+    : `<span class="pill ok">al día</span>`;
+  box.innerHTML =
+    `<span class="pill">retención: ${escapeHtml(String(hours))} h</span>` +
+    `<span class="pill">duplicados: ${escapeHtml(String(info.duplicate_window_days))} días</span>` +
+    `<span class="pill ok">${escapeHtml(String(info.total_seen || 0))} vistas recordadas</span>` +
+    due +
+    `<span class="small muted">última limpieza: ${escapeHtml(info.last_purge_at ? formatDate(info.last_purge_at) : "nunca")}</span>`;
+}
+
+async function purge() {
+  const button = $("btn-purge");
+  await withBusy(button, "Limpiando…", async () => {
+    try {
+      const result = await api("/api/maintenance/purge", {
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      });
+      $("purge-result").innerHTML =
+        `<span class="pill ok">hecho</span> ${escapeHtml(String(result.purged || 0))} publicación(es) ` +
+        `y ${escapeHtml(String(result.files_removed || 0))} archivo(s) borrados · ` +
+        `se recuerdan ${escapeHtml(String(result.seen_kept || 0))} para no repetirlas`;
+      toast("Limpieza completada.");
+      await loadTweets();
+      await loadState();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
 }
 
 function renderSettings(settings) {
@@ -264,7 +379,8 @@ async function loadTweets() {
   const status = $("filter-status").value;
   const handle = $("filter-account").value;
   const limit = $("filter-limit").value;
-  const query = new URLSearchParams({ status, limit });
+  const pending = $("filter-pending").value;
+  const query = new URLSearchParams({ status, limit, pending });
   if (handle) query.set("handle", handle);
   const payload = await api(`/api/tweets?${query.toString()}`);
   app.tweets = payload.tweets || [];
@@ -315,10 +431,22 @@ function tweetCard(tweet) {
   const editorButton = tweet.has_card
     ? `<button class="small accent" data-editor="${escapeHtml(String(tweet.card_id))}">Abrir editor</button>`
     : "";
+  const processed = tweet.is_processed
+    ? `<span class="done-flag">✓ procesada</span>`
+    : "";
+  const duplicate = tweet.is_duplicate
+    ? `<span class="pill" style="border-color:#4a4658">repetida${tweet.duplicate_of ? ` de ${escapeHtml(tweet.duplicate_of)}` : ""}</span>`
+    : "";
+  const classes = ["tweet"];
+  if (app.selectedId === tweet.tweet_id) classes.push("selected");
+  if (tweet.is_processed) classes.push("processed");
+  if (tweet.is_duplicate) classes.push("is-duplicate");
+
   return `
-    <div class="tweet ${app.selectedId === tweet.tweet_id ? "selected" : ""}">
+    <div class="${classes.join(" ")}">
       <div class="meta">
         <span class="badge ${escapeHtml(tweet.status)}">${escapeHtml(tweet.status)}</span>
+        ${processed}${duplicate}
         <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>
         ${tweet.author_handle && tweet.author_handle !== tweet.source_handle
           ? `<span class="muted">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}
@@ -334,7 +462,7 @@ function tweetCard(tweet) {
         : `<div class="thumbs">${thumbs}</div>`}
       <div class="actions">
         <button class="small primary" data-process="${escapeHtml(tweet.tweet_id)}"
-                ${noMedia ? "disabled title='Sin imágenes'" : ""}>Procesar</button>
+                ${noMedia ? "disabled title='Sin imágenes'" : ""}>${tweet.is_processed ? "Reprocesar" : "Procesar"}</button>
         ${editorButton}
         ${tweet.url ? `<a class="small" href="${escapeHtml(tweet.url)}" target="_blank" rel="noopener">Ver original</a>` : ""}
         <button class="small ghost" data-status="${escapeHtml(tweet.tweet_id)}" data-value="descartado">Descartar</button>
@@ -406,7 +534,6 @@ async function processTweet(tweetId, button) {
     }
   });
 }
-
 function openEditor(cardId) {
   // Editor independiente: pestaña propia.
   window.open(`/editor.html?card=${encodeURIComponent(cardId)}`, "_blank", "noopener");
@@ -672,6 +799,9 @@ document.addEventListener("click", async (event) => {
   if (dataset.tab) return switchTab(dataset.tab);
   if (target.id === "btn-poll") return poll();
   if (target.id === "btn-refresh") return refreshAll();
+  if (target.id === "btn-chatgpt-login") return openChatgptLogin();
+  if (target.id === "btn-analysis-test") return testAnalysis();
+  if (target.id === "btn-purge") return purge();
   if (target.id === "btn-analyze") return analyzeSelected();
   if (target.id === "btn-generate") return generateCard();
   if (target.id === "btn-render") return renderCard();
@@ -756,7 +886,7 @@ $("form-account").addEventListener("submit", async (event) => {
   }
 });
 
-for (const id of ["filter-status", "filter-account", "filter-limit"]) {
+for (const id of ["filter-status", "filter-account", "filter-limit", "filter-pending"]) {
   $(id).addEventListener("change", () => loadTweets().catch((error) => toast(error.message, "error")));
 }
 
