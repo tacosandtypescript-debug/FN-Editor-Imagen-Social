@@ -175,7 +175,12 @@ class CodexCliAnalysis:
             + analysis_module.build_user_prompt(tweet, analysis_module.palette_colors())
         )
 
-        with tempfile.TemporaryDirectory(prefix="editimg-codex-") as temporary:
+        # `ignore_cleanup_errors` porque en Windows el proceso de Codex puede
+        # dejar un manejador abierto sobre su directorio de trabajo y el borrado
+        # falla: no tiene sentido que eso tumbe un análisis ya completado.
+        with tempfile.TemporaryDirectory(
+            prefix="editimg-codex-", ignore_cleanup_errors=True
+        ) as temporary:
             work = Path(temporary)
             schema_file = work / "schema.json"
             output_file = work / "salida.json"

@@ -19,8 +19,9 @@
   <button id="btn-refresh" class="ghost small">Refrescar</button>
 </header>
 
-<nav class="tabs">
-  <button data-tab="inbox" class="active">Bandeja</button>
+<nav class="tabs" role="tablist" aria-label="Secciones del dashboard">
+  <button data-tab="inbox" class="active" aria-current="page">Bandeja</button>
+  <button data-tab="cards">Procesadas</button>
   <button data-tab="editor">Editor</button>
   <button data-tab="accounts">Cuentas</button>
   <button data-tab="settings">Estado y ajustes</button>
@@ -80,6 +81,25 @@
       <div id="poller-state" class="row small" style="margin-top:10px"></div>
     </div>
     <div id="inbox" class="feed"></div>
+  </section>
+
+  <!-- ============ PROCESADAS ============ -->
+  <section id="tab-cards" hidden>
+    <div class="panel">
+      <h2>Tarjetas procesadas</h2>
+      <p class="small muted" style="margin-top:0">
+        Aquí quedan todas las tarjetas que ya creaste, aunque hayan salido de la
+        bandeja de pendientes. Desde aquí puedes <strong>abrir el editor</strong>,
+        <strong>volver a generar el texto y los colores</strong> con tu
+        suscripción, <strong>enviarlas a Telegram</strong> o descargarlas.
+      </p>
+      <div class="row">
+        <button id="btn-refresh-cards" class="ghost small">Actualizar</button>
+        <div class="spacer"></div>
+        <div id="cards-count" class="small muted"></div>
+      </div>
+    </div>
+    <div id="cards" class="grid cols-3"></div>
   </section>
 
   <!-- ============ EDITOR ============ -->
@@ -296,7 +316,7 @@
 
 </main>
 
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="false"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

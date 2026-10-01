@@ -3,9 +3,33 @@
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Iconos en SVG, no emoji.
+ *
+ * El emoji se ve distinto en cada sistema, no hereda el color del texto y los
+ * lectores de pantalla lo leen en voz alta. Con SVG se controla el trazo, el
+ * tamaño y la accesibilidad.
+ */
+const ICON = {
+  reloj:
+    `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">` +
+    `<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>`,
+  visto:
+    `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" ` +
+    `stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ` +
+    `focusable="false"><path d="M20 6L9 17l-5-5"/></svg>`,
+};
+
+/** Indicador de carga accesible, en lugar de un emoji girando. */
+function spinner(label) {
+  return `<span class="spinner" role="status" aria-label="${escapeHtml(label)}"></span>`;
+}
+
 const app = {
   state: null,
   tweets: [],
+  cards: [],
   selectedId: null,
   card: null,
   busy: false,
@@ -127,13 +151,15 @@ function withBusy(button, label, task) {
   const original = button ? button.textContent : null;
   if (button) {
     button.disabled = true;
-    button.innerHTML = `<span class="spinner"></span> ${escapeHtml(label)}`;
+    button.setAttribute("aria-busy", "true");
+    button.innerHTML = `${spinner(label)} ${escapeHtml(label)}`;
   }
   return Promise.resolve()
     .then(task)
     .finally(() => {
       if (button) {
         button.disabled = false;
+        button.removeAttribute("aria-busy");
         button.textContent = original;
       }
     });
@@ -190,7 +216,7 @@ function renderProviderPills(state) {
           ? "Las horas se calculan contra servidores públicos de hora, no contra el reloj del sistema."
           : "El reloj del sistema coincide con la hora de referencia."
       )}">` +
-      `<span class="dot"></span>🕒 ${escapeHtml(clock.local_offset_human || "UTC")}` +
+      `<span class="dot"></span>${ICON.reloj} ${escapeHtml(clock.local_offset_human || "UTC")}` +
       (skewed ? ` · reloj ${escapeHtml(clock.offset_human || "")}` : "") +
       `</span>`
     );
@@ -380,7 +406,7 @@ function renderPollerState(state) {
   } else if (poller.busy) {
     const progress = poller.progress || {};
     parts.push(
-      `<span class="pill ok"><span class="spinner"></span>buscnado… ${progress.done || 0}/${progress.total || "?"}</span>`,
+      `<span class="pill ok">${spinner("buscando")}buscando… ${progress.done || 0}/${progress.total || "?"}</span>`,
       progress.current ? `<span class="muted">leyendo @${escapeHtml(progress.current)}</span>` : ""
     );
   } else {
@@ -397,6 +423,15 @@ function renderPollerState(state) {
   }
   if (poller.last_error) {
     parts.push(`<span class="pill off">último error: ${escapeHtml(poller.last_error)}</span>`);
+  }
+
+  // Trabajos de procesado: se ven aunque el móvil haya perdido la conexión.
+  const jobs = state.jobs || {};
+  if (jobs.busy) {
+    parts.push(
+      `<span class="pill warn">${spinner("procesando")}procesando` +
+      (jobs.pending ? ` (+${jobs.pending} en cola)` : "") + `</span>`
+    );
   }
   box.innerHTML = parts.join(" ");
 }
@@ -542,12 +577,17 @@ function tweetCard(tweet) {
           onerror="this.style.display='none'">`
   )).join("");
   const noMedia = !(tweet.media || []).length;
+  const processing = tweet.status === "procesando";
   // Botón «Procesar» siempre; «Abrir editor» solo cuando ya hay tarjeta.
   const editorButton = tweet.has_card
     ? `<button class="small accent" data-editor="${escapeHtml(String(tweet.card_id))}">Abrir editor</button>`
     : "";
+  const processButton = processing
+    ? `<button class="small" disabled>${spinner("procesando")} procesando…</button>`
+    : `<button class="small primary" data-process="${escapeHtml(tweet.tweet_id)}"
+               ${noMedia ? "disabled title='Sin imágenes'" : ""}>${tweet.is_processed ? "Reprocesar" : "Procesar"}</button>`;
   const processed = tweet.is_processed
-    ? `<span class="done-flag">✓ procesada</span>`
+    ? `<span class="done-flag">${ICON.visto} procesada</span>`
     : "";
   const duplicate = tweet.is_duplicate
     ? `<span class="pill" style="border-color:#4a4658">repetida${tweet.duplicate_of ? ` de ${escapeHtml(tweet.duplicate_of)}` : ""}</span>`
@@ -576,8 +616,7 @@ function tweetCard(tweet) {
         ? `<div class="small" style="color:var(--warn)">Sin imágenes: el compositor necesita al menos una para crear la tarjeta.</div>`
         : `<div class="thumbs">${thumbs}</div>`}
       <div class="actions">
-        <button class="small primary" data-process="${escapeHtml(tweet.tweet_id)}"
-                ${noMedia ? "disabled title='Sin imágenes'" : ""}>${tweet.is_processed ? "Reprocesar" : "Procesar"}</button>
+        ${processButton}
         ${editorButton}
         ${tweet.url ? `<a class="small" href="${escapeHtml(tweet.url)}" target="_blank" rel="noopener">Ver original</a>` : ""}
         <button class="small ghost" data-status="${escapeHtml(tweet.tweet_id)}" data-value="descartado">Descartar</button>
@@ -628,27 +667,59 @@ function renderInbox(tweets) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Procesar: analiza, descarga y compone, y revela «Abrir editor»      */
+/* Procesar: se encola y se sigue, sin dejar al navegador esperando    */
 /* ------------------------------------------------------------------ */
 async function processTweet(tweetId, button) {
-  await withBusy(button, "Procesando…", async () => {
+  await withBusy(button, "Encolando…", async () => {
     try {
       const payload = await api(`/api/tweets/${tweetId}/process`, {
         method: "POST",
         body: JSON.stringify({}),
       });
-      const card = payload.card || {};
+      const job = payload.job || {};
       toast(
-        `Tarjeta v${card.version} lista (${(payload.steps || []).join(" + ")}). ` +
-        "Ya puedes abrir el editor."
+        `Procesando en segundo plano (trabajo ${job.id}). Puedes seguir usando el ` +
+        "dashboard o bloquear el móvil: el trabajo continúa en el servidor."
       );
       await loadTweets();
+      const finished = await waitForJob(job.id);
+      await loadTweets();
       await loadState();
+      if (finished && finished.state === "hecho") {
+        toast("Tarjeta lista. Pulsa «Abrir editor» en la publicación.");
+      }
     } catch (error) {
       toast(error.message, "error");
     }
   });
 }
+
+/**
+ * Sigue un trabajo hasta que termina.
+ *
+ * El trabajo vive en el servidor: da igual que el móvil se bloquee o pierda la
+ * conexión un momento, porque al volver la tarjeta ya está hecha.
+ */
+async function waitForJob(jobId) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    let job = null;
+    try {
+      job = (await api(`/api/jobs/${jobId}`)).job;
+    } catch (error) {
+      continue;   // un fallo puntual de red no cancela el trabajo
+    }
+    if (!job) continue;
+    if (job.state === "hecho") return job;
+    if (job.state === "fallido") {
+      toast(job.detail || "El trabajo falló en el servidor.", "error");
+      return job;
+    }
+  }
+  toast("El trabajo sigue en marcha; la bandeja se actualizará sola.", "error");
+  return null;
+}
+
 function openEditor(cardId) {
   // Editor independiente: pestaña propia.
   window.open(`/editor.html?card=${encodeURIComponent(cardId)}`, "_blank", "noopener");
@@ -782,7 +853,7 @@ async function waitForPoller() {
     if (poller.busy) {
       sawActivity = true;
       $("btn-poll").innerHTML =
-        `<span class="spinner"></span> ${progress.done || 0}/${progress.total || "?"}`;
+        `${spinner("sondeando")} ${progress.done || 0}/${progress.total || "?"}`;
       if (progress.current) {
         $("render-info") && ($("render-info").textContent = `Leyendo @${progress.current}…`);
       }
@@ -894,14 +965,151 @@ async function sendCard() {
 /* ------------------------------------------------------------------ */
 /* Navegación                                                          */
 /* ------------------------------------------------------------------ */
-function switchTab(name) {
+/* ------------------------------------------------------------------ */
+/* Procesadas: donde viven las tarjetas ya creadas                     */
+/* ------------------------------------------------------------------ */
+async function loadCards() {
+  const payload = await api("/api/cards?limit=200");
+  app.cards = payload.cards || [];
+  renderCards(app.cards);
+}
+
+function renderCards(cards) {
+  const box = $("cards");
+  const contador = $("cards-count");
+  if (!box) return;
+  if (contador) {
+    contador.textContent = cards.length
+      ? `${cards.length} tarjeta(s) · ${cards.filter((c) => c.sent).length} enviada(s)`
+      : "";
+  }
+  if (!cards.length) {
+    box.innerHTML = `<div class="empty">Todavía no has procesado ninguna publicación.
+      Procesa alguna desde la bandeja y aparecerá aquí.</div>`;
+    return;
+  }
+
+  box.innerHTML = cards.map((item) => {
+    const card = item.card || {};
+    const tweet = item.tweet || {};
+    const meta = card.meta || {};
+    const params = card.params || {};
+    const src = `/api/cards/${card.id}/image?v=${encodeURIComponent(card.output_path || card.id)}`;
+    // Se reserva el espacio de la imagen con su proporción real: si no, al
+    // cargar empuja el contenido y la lista da un salto (CLS).
+    const ancho = Number(meta.width) || 0;
+    const alto = Number(meta.height) || 0;
+    const proporcion = ancho > 0 && alto > 0 ? `aspect-ratio: ${ancho} / ${alto};` : "";
+    const estado = item.sent
+      ? `<span class="pill ok"><span class="dot"></span>enviada</span>`
+      : `<span class="pill">sin enviar</span>`;
+    const entrega = item.last_delivery
+      ? `<span class="small muted">última entrega: ${escapeHtml(item.last_delivery.status)} ` +
+        `${escapeHtml(formatDate(item.last_delivery.created_at))}</span>`
+      : "";
+    return `
+      <div class="tweet processed">
+        <div class="meta">
+          ${estado}
+          <span class="badge tarjeta_lista">v${escapeHtml(String(card.version))}</span>
+          <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle || "")}</span>
+          <span class="muted">${escapeHtml(tweet.posted_relative || "")}</span>
+        </div>
+        <a href="${escapeHtml(item.editor_url)}" target="_blank" rel="noopener">
+          <img src="${src}" alt="Tarjeta generada de @${escapeHtml(tweet.author_handle || "")}"
+               loading="lazy" decoding="async"
+               style="width:100%;border-radius:10px;border:1px solid var(--line);${proporcion}">
+        </a>
+        <div class="small"><strong>${escapeHtml(params.top || "")}</strong></div>
+        <div class="small muted">${escapeHtml(params.bottom || "")}</div>
+        <div class="small muted">${escapeHtml(String(meta.width || "?"))}×${escapeHtml(String(meta.height || "?"))}
+          · ${escapeHtml(String(meta.output_format || ""))}</div>
+        ${entrega}
+        <div class="actions">
+          <button class="small accent" data-editor="${escapeHtml(String(card.id))}">Abrir editor</button>
+          <button class="small" data-regen="${escapeHtml(String(card.id))}">Regenerar texto</button>
+          <button class="small primary" data-send="${escapeHtml(String(card.id))}">Enviar a Telegram</button>
+          <a class="small" href="${src}" download="tarjeta-${escapeHtml(String(card.id))}.png">Descargar</a>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+/** Regenera el texto de una tarjeta ya creada (encolado, sin bloquear). */
+async function regenerateCard(cardId, button) {
+  await withBusy(button, "Encolando…", async () => {
+    try {
+      const payload = await api(`/api/cards/${cardId}/regenerate-text`, {
+        method: "POST",
+        body: JSON.stringify({ render: true }),
+      });
+      toast(`Regenerando el texto en segundo plano (trabajo ${payload.job.id}).`);
+      const finished = await waitForJob(payload.job.id);
+      await loadCards();
+      if (finished && finished.state === "hecho") {
+        toast("Texto y colores regenerados. Abre el editor para revisarlos.");
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+/** Envía una tarjeta a Telegram (encolado: el PNG pesa mucho). */
+async function sendCardFromList(cardId, button) {
+  await withBusy(button, "Encolando…", async () => {
+    try {
+      const payload = await api(`/api/cards/${cardId}/send`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      toast(`Enviando en segundo plano (trabajo ${payload.job.id}).`);
+      const finished = await waitForJob(payload.job.id);
+      await loadCards();
+      if (finished && finished.state === "hecho") {
+        toast("Tarjeta entregada.");
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+const TABS = ["inbox", "cards", "editor", "accounts", "settings", "log"];
+
+/** Pestaña indicada en la dirección; permite recargar sin perder el sitio. */
+function tabFromHash() {
+  const name = String(window.location.hash || "").replace("#", "").trim();
+  return TABS.includes(name) ? name : "inbox";
+}
+
+function switchTab(name, updateHash = true) {
+  const destino = TABS.includes(name) ? name : "inbox";
   for (const button of document.querySelectorAll("nav.tabs button")) {
-    button.classList.toggle("active", button.dataset.tab === name);
+    const activo = button.dataset.tab === destino;
+    button.classList.toggle("active", activo);
+    // Para lectores de pantalla, además del color.
+    if (activo) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   }
   for (const section of document.querySelectorAll("main > section")) {
-    section.hidden = section.id !== `tab-${name}`;
+    section.hidden = section.id !== `tab-${destino}`;
+  }
+  // La dirección refleja la pestaña: al recargar o volver atrás no se pierde.
+  if (updateHash && window.location.hash !== `#${destino}`) {
+    try {
+      window.history.replaceState(null, "", `#${destino}`);
+    } catch (error) {
+      window.location.hash = destino;
+    }
+  }
+  // La pestaña de procesadas se refresca al entrar, para no quedarse obsoleta.
+  if (destino === "cards") {
+    loadCards().catch((error) => toast(error.message, "error"));
   }
 }
+
+window.addEventListener("hashchange", () => switchTab(tabFromHash(), false));
 
 /* ------------------------------------------------------------------ */
 /* Eventos                                                             */
@@ -917,6 +1125,10 @@ document.addEventListener("click", async (event) => {
   if (target.id === "btn-chatgpt-login") return openChatgptLogin();
   if (target.id === "btn-analysis-test") return testAnalysis();
   if (target.id === "btn-purge") return purge();
+  if (target.id === "btn-refresh-cards") return loadCards().catch((e) => toast(e.message, "error"));
+
+  if (dataset.regen) return regenerateCard(dataset.regen, target);
+  if (dataset.send) return sendCardFromList(dataset.send, target);
   if (target.id === "btn-analyze") return analyzeSelected();
   if (target.id === "btn-generate") return generateCard();
   if (target.id === "btn-render") return renderCard();
@@ -1012,7 +1224,10 @@ async function refreshAll() {
   try {
     await loadState();
     await loadTweets();
+    // Se respeta la pestaña de la dirección al arrancar.
+    switchTab(tabFromHash(), false);
     if (app.selectedId) await openTweet(app.selectedId);
+    if (tabFromHash() === "cards") await loadCards();
   } catch (error) {
     toast(error.message, "error");
   }

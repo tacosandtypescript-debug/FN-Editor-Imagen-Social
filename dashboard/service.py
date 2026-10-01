@@ -14,12 +14,14 @@ from . import config
 from . import timefmt
 from . import urls
 from .clock import CLOCK
+from .jobs import JobQueue
 from .pipeline import cards as cards_pipeline
 from .pipeline import media as media_pipeline
 from .providers import analysis as analysis_providers
 from .providers import telegram as telegram_providers
 from .providers import timelines as timeline_providers
 from .store import Store
+from . import store as store_module
 
 #: Máximo de publicaciones que se enriquecen **por cuenta** en un sondeo.
 ENRICH_LIMIT = 25
@@ -41,9 +43,137 @@ class DashboardError(RuntimeError):
 class DashboardService:
     """Orquesta el flujo completo sobre el repositorio existente."""
 
-    def __init__(self, store: Store | None = None) -> None:
+    def __init__(self, store: Store | None = None, workers: int = 1) -> None:
         config.ensure_directories()
         self.store = store or Store()
+        #: «Procesar» es pesado (Codex ~30 s + composición 4K). Se atiende en
+        #: segundo plano para que el navegador no tenga que esperar: si el
+        #: móvil corta la petición, el trabajo se pierde aunque el servidor
+        #: hubiera terminado bien.
+        self.jobs = JobQueue(workers=workers)
+
+    def shutdown(self) -> None:
+        self.jobs.stop()
+
+    def jobs_state(self) -> dict:
+        return self.jobs.state()
+
+    def list_cards_view(self, limit: int = 200) -> list[dict]:
+        """Todas las tarjetas creadas, con su publicación y su última entrega.
+
+        Es la vista que faltaba: al procesar, la publicación sale de la bandeja
+        de pendientes y no había ningún sitio donde volver a verla para
+        enviarla o cambiarle el texto.
+        """
+        out: list[dict] = []
+        for card in self.store.list_cards()[: max(1, int(limit))]:
+            tweet = self.store.get_tweet(card["tweet_id"])
+            resumen: dict = {}
+            if tweet:
+                decorated = self._decorate_media(timefmt.decorate_tweet(dict(tweet), CLOCK))
+                resumen = {
+                    key: decorated.get(key)
+                    for key in (
+                        "tweet_id",
+                        "author_handle",
+                        "source_handle",
+                        "text",
+                        "url",
+                        "status",
+                        "posted_relative",
+                        "posted_absolute",
+                        "thumbs",
+                        "media",
+                    )
+                }
+            deliveries = self.store.list_deliveries(card["id"], limit=1)
+            out.append(
+                {
+                    "card": card,
+                    "tweet": resumen,
+                    "last_delivery": deliveries[0] if deliveries else None,
+                    "sent": bool(deliveries and deliveries[0].get("status") == "ok"),
+                    "editor_url": f"/editor.html?card={card['id']}",
+                }
+            )
+        return out
+
+    def enqueue_regenerate(
+        self,
+        card_id: int,
+        instructions: str | None = None,
+        provider: str | None = None,
+        render: bool = True,
+    ) -> dict:
+        """Encola la regeneración del texto de una tarjeta ya creada."""
+        card = self.get_card(card_id)
+        label = f"texto de la tarjeta {card_id}"
+
+        def trabajo() -> dict:
+            return self.regenerate_text(
+                card_id, instructions=instructions, render=render, provider=provider
+            )
+
+        job = self.jobs.submit("regenerar", label, trabajo)
+        self.store.log(
+            f"Encolada la regeneración de texto de la tarjeta {card_id} (trabajo {job.id})",
+            tweet_id=card["tweet_id"],
+        )
+        return job.as_dict()
+
+    def enqueue_send(
+        self, card_id: int, caption: str | None = None, provider: str | None = None
+    ) -> dict:
+        """Encola la entrega de una tarjeta.
+
+        La subida puede tardar: el PNG sin comprimir ronda los 30 MB y por una
+        conexión móvil eso no cabe en una petición que el navegador espere.
+        """
+        card = self.get_card(card_id)
+        label = f"envío de la tarjeta {card_id}"
+
+        def trabajo() -> dict:
+            return self.send_card(card_id, caption=caption, provider=provider)
+
+        job = self.jobs.submit("enviar", label, trabajo)
+        self.store.log(
+            f"Encolada la entrega de la tarjeta {card_id} (trabajo {job.id})",
+            tweet_id=card["tweet_id"],
+        )
+        return job.as_dict()
+
+    def enqueue_process(
+        self,
+        tweet_id: str,
+        params: dict | None = None,
+        provider: str | None = None,
+        force_analysis: bool = False,
+    ) -> dict:
+        """Encola el procesado de una publicación y responde al instante."""
+        tweet = self.get_tweet(tweet_id)
+        if not tweet.get("media"):
+            raise DashboardError(
+                "la publicación no tiene imágenes: el compositor necesita al menos una"
+            )
+
+        handle = tweet.get("author_handle") or tweet.get("source_handle") or ""
+        label = f"@{handle} · {tweet_id}"
+
+        def trabajo() -> dict:
+            try:
+                return self.process_tweet(tweet_id, params, provider, force_analysis)
+            except Exception as exc:  # noqa: BLE001
+                # La publicación no debe quedarse en «procesando» para siempre.
+                message = str(exc)[:400]
+                self.store.set_tweet_status(
+                    tweet_id, store_module.STATUS_FAILED, detail=message
+                )
+                raise
+
+        self.store.set_tweet_status(tweet_id, store_module.STATUS_PROCESSING)
+        job = self.jobs.submit("procesar", label, trabajo)
+        self.store.log(f"Encolado el procesado de {tweet_id} (trabajo {job.id})", tweet_id=tweet_id)
+        return job.as_dict()
 
     # ------------------------------------------------------------------
     # Estado general
@@ -63,6 +193,7 @@ class DashboardService:
             "clock": self.clock_status(),
             "analysis_status": self.analysis_status(),
             "maintenance": self.maintenance_state(),
+            "jobs": self.jobs_state(),
             "events": self.store.recent_events(40),
         }
 
@@ -369,13 +500,15 @@ class DashboardService:
         return tweets
 
     @staticmethod
-    def _decorate_media(tweet: dict) -> None:
+    def _decorate_media(tweet: dict) -> dict:
         """Añade la lista de miniaturas reducidas junto a los medios originales.
 
         La lista `media` se conserva tal cual porque es la que se usa al
         componer; `thumbs` es solo para mostrar, y pesa siete veces menos.
+        Devuelve el propio diccionario para poder encadenar la llamada.
         """
         tweet["thumbs"] = urls.thumbnails(tweet.get("media") or [])
+        return tweet
 
     def maintenance(self, force: bool = False) -> dict:
         """Limpia la bandeja según la retención configurada.

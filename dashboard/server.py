@@ -25,6 +25,8 @@ ROUTES = (
     ("GET", re.compile(r"^/api/state$"), "get_state"),
     ("GET", re.compile(r"^/api/events$"), "get_events"),
     ("GET", re.compile(r"^/api/analysis/status$"), "get_analysis_status"),
+    ("GET", re.compile(r"^/api/jobs$"), "get_jobs"),
+    ("GET", re.compile(r"^/api/jobs/(\d+)$"), "get_job"),
     ("POST", re.compile(r"^/api/analysis/test$"), "post_analysis_test"),
     ("POST", re.compile(r"^/api/profiles/chatgpt/open$"), "post_chatgpt_login"),
     ("GET", re.compile(r"^/api/accounts$"), "get_accounts"),
@@ -40,6 +42,7 @@ ROUTES = (
     ("POST", re.compile(r"^/api/tweets/(\d+)/analyze$"), "post_tweet_analyze"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/process$"), "post_tweet_process"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/card$"), "post_tweet_card"),
+    ("GET", re.compile(r"^/api/cards$"), "get_cards"),
     ("GET", re.compile(r"^/api/cards/(\d+)$"), "get_card"),
     ("POST", re.compile(r"^/api/cards/(\d+)/render$"), "post_card_render"),
     ("POST", re.compile(r"^/api/cards/(\d+)/regenerate-text$"), "post_card_regenerate_text"),
@@ -367,28 +370,65 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"card": card}, status=201)
 
     def post_tweet_process(self, query, tweet_id: str) -> None:
-        """Botón «Procesar»: análisis, descarga y composición en un paso."""
+        """Botón «Procesar»: análisis, descarga y composición.
+
+        Se atiende en segundo plano y responde al instante. El trabajo tarda
+        entre treinta y sesenta segundos (Codex más composición 4K); mantener
+        al navegador esperando hacía que, al cortarse la petición, la interfaz
+        mostrara un fallo aunque el servidor hubiera terminado bien. Con
+        `sync` se puede forzar el camino directo, útil para pruebas.
+        """
         payload = self._read_json()
-        result = self.service.process_tweet(
-            tweet_id,
-            payload.get("params") or None,
-            payload.get("provider") or None,
-        )
-        self._send_json(result, status=201)
+        params = payload.get("params") or None
+        provider = payload.get("provider") or None
+        force = bool(payload.get("force_analysis"))
+        if payload.get("sync"):
+            self._send_json(self.service.process_tweet(tweet_id, params, provider, force), status=201)
+            return
+        job = self.service.enqueue_process(tweet_id, params, provider, force)
+        self._send_json({"job": job, "queued": True}, status=202)
+
+    def get_jobs(self, query, *groups) -> None:
+        self._send_json(self.service.jobs_state())
+
+    def get_job(self, query, job_id: str) -> None:
+        job = self.service.jobs.get(int(job_id))
+        if job is None:
+            raise DashboardError(f"no existe el trabajo {job_id}")
+        self._send_json({"job": job.as_dict(include_result=True)})
 
     def post_card_regenerate_text(self, query, card_id: str) -> None:
-        """Regenera solo titular, texto inferior y caption."""
+        """Regenera titular, texto inferior y caption.
+
+        Se encola: el análisis tarda unos treinta segundos y el navegador no
+        debe quedarse esperando. Con `sync` se fuerza el camino directo.
+        """
         payload = self._read_json()
-        result = self.service.regenerate_text(
+        if payload.get("sync"):
+            self._send_json(
+                self.service.regenerate_text(
+                    int(card_id),
+                    instructions=payload.get("instructions"),
+                    render=bool(payload.get("render", True)),
+                    provider=payload.get("provider") or None,
+                )
+            )
+            return
+        job = self.service.enqueue_regenerate(
             int(card_id),
             instructions=payload.get("instructions"),
-            render=bool(payload.get("render", True)),
             provider=payload.get("provider") or None,
+            render=bool(payload.get("render", True)),
         )
-        self._send_json(result)
+        self._send_json({"job": job, "queued": True}, status=202)
 
     def get_card(self, query, card_id: str) -> None:
         self._send_json({"card": self.service.get_card(int(card_id))})
+
+    def get_cards(self, query, *groups) -> None:
+        """Listado de tarjetas creadas: la vista de «ya procesadas»."""
+        limit = _int_param(query, "limit", 200)
+        self._send_json({"cards": self.service.list_cards_view(limit)})
 
     def post_card_render(self, query, card_id: str) -> None:
         payload = self._read_json()
@@ -397,12 +437,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def post_card_send(self, query, card_id: str) -> None:
         payload = self._read_json()
-        result = self.service.send_card(
-            int(card_id),
-            caption=payload.get("caption"),
-            provider=payload.get("provider") or None,
-        )
-        self._send_json(result)
+        caption = payload.get("caption")
+        provider = payload.get("provider") or None
+        if payload.get("sync"):
+            self._send_json(
+                self.service.send_card(int(card_id), caption=caption, provider=provider)
+            )
+            return
+        job = self.service.enqueue_send(int(card_id), caption=caption, provider=provider)
+        self._send_json({"job": job, "queued": True}, status=202)
 
     def get_card_image(self, query, card_id: str) -> None:
         path = self.service.card_image(int(card_id))
@@ -528,6 +571,9 @@ def serve(host: str | None = None, port: int | None = None, periodic: bool = Tru
         print("\nDeteniendo el dashboard…")
     finally:
         poller.stop()
+        # Los hilos de la cola de trabajos deben terminar antes de salir; si no,
+        # pueden seguir usando la base de datos mientras se cierra todo.
+        service.shutdown()
         server.shutdown()
         server.server_close()
 

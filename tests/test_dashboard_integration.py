@@ -1,4 +1,4 @@
-"""Tests de integración del dashboard.
+﻿"""Tests de integración del dashboard.
 
 Ejercitan el compositor real y la API HTTP completa sin salir a la red: los
 medios se colocan ya descargados en el directorio de trabajo y el análisis y
@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -84,6 +85,7 @@ class DashboardIntegrationTests(unittest.TestCase):
         Image.new("RGB", (640, 360), (35, 90, 170)).save(self.source)
 
     def tearDown(self):
+        self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()
@@ -509,6 +511,9 @@ class DashboardHttpTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+        # Los hilos de la cola de trabajos deben parar antes de borrar el
+        # directorio temporal: si no, siguen usando la base de datos.
+        self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()
@@ -598,7 +603,7 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertTrue(image.startswith(b"\x89PNG"))
 
         status, sent = self.call(
-            "POST", f"/api/cards/{card_id}/send", {"provider": "local", "caption": "hola"}
+            "POST", f"/api/cards/{card_id}/send", {"provider": "local", "caption": "hola", "sync": True}
         )
         self.assertEqual(status, 200)
         self.assertTrue(sent["delivery"]["ok"])
@@ -639,10 +644,11 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn(b"regenerate-text", body)
 
     def test_process_endpoint_runs_the_whole_flow(self):
+        # `sync` fuerza el camino directo; el normal es en segundo plano.
         status, result = self.call(
             "POST",
             f"/api/tweets/{self.tweet_id}/process",
-            {"params": {"resolution": "native", "backend": "cpu"}},
+            {"params": {"resolution": "native", "backend": "cpu"}, "sync": True},
         )
         self.assertEqual(status, 201)
         self.assertTrue(result["card"]["meta"]["verification"]["ok"])
@@ -664,7 +670,7 @@ class DashboardHttpTests(unittest.TestCase):
         status, _ = self.call(
             "POST",
             f"/api/tweets/{self.tweet_id}/process",
-            {"params": {"resolution": "native", "backend": "cpu"}},
+            {"params": {"resolution": "native", "backend": "cpu"}, "sync": True},
         )
         self.assertEqual(status, 201)
 
@@ -688,7 +694,7 @@ class DashboardHttpTests(unittest.TestCase):
         status, result = self.call(
             "POST",
             f"/api/cards/{card_id}/regenerate-text",
-            {"provider": "manual", "instructions": "más corto", "render": False},
+            {"provider": "manual", "instructions": "más corto", "render": False, "sync": True},
         )
         self.assertEqual(status, 200)
         self.assertTrue(result["text_only"])
@@ -701,10 +707,118 @@ class DashboardHttpTests(unittest.TestCase):
 
     def test_regenerate_text_on_missing_card_is_rejected(self):
         status, payload = self.call(
-            "POST", "/api/cards/987654/regenerate-text", {"provider": "manual"}
+            "POST", "/api/cards/987654/regenerate-text", {"provider": "manual", "sync": True}
         )
         self.assertEqual(status, 400)
         self.assertIn("no existe", payload["error"])
+
+    # --- vista de procesadas ------------------------------------------
+    def test_the_cards_view_lists_processed_cards(self):
+        """La vista que faltaba: ver lo ya procesado para enviarlo o editarlo."""
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "UN TITULAR", "bottom": "UN CONTEXTO",
+                        "resolution": "native", "backend": "cpu"}},
+        )
+        self.assertEqual(status, 201)
+        card_id = created["card"]["id"]
+
+        status, payload = self.call("GET", "/api/cards?limit=50")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["cards"]), 1)
+        item = payload["cards"][0]
+        self.assertEqual(item["card"]["id"], card_id)
+        self.assertEqual(item["editor_url"], f"/editor.html?card={card_id}")
+        self.assertFalse(item["sent"])
+        self.assertIsNone(item["last_delivery"])
+        # Trae lo necesario para mostrarla sin más consultas.
+        self.assertEqual(item["tweet"]["author_handle"], "Cuenta")
+        self.assertIn("posted_relative", item["tweet"])
+        self.assertIn("thumbs", item["tweet"])
+
+    def test_the_cards_view_marks_what_was_already_sent(self):
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        self.assertEqual(status, 201)
+        card_id = created["card"]["id"]
+        status, _ = self.call(
+            "POST", f"/api/cards/{card_id}/send",
+            {"provider": "local", "caption": "hola", "sync": True},
+        )
+        self.assertEqual(status, 200)
+
+        status, payload = self.call("GET", "/api/cards?limit=50")
+        item = payload["cards"][0]
+        self.assertTrue(item["sent"])
+        self.assertEqual(item["last_delivery"]["status"], "ok")
+
+    def test_process_runs_in_the_background_by_default(self):
+        """La petición responde al instante y el trabajo sigue en el servidor."""
+        status, payload = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/process",
+            {"params": {"resolution": "native", "backend": "cpu"}},
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        job_id = payload["job"]["id"]
+        self.assertIn(payload["job"]["state"], ("en_espera", "en_curso"))
+
+        deadline = time.time() + 150
+        state = None
+        while time.time() < deadline:
+            status, job = self.call("GET", f"/api/jobs/{job_id}")
+            self.assertEqual(status, 200)
+            state = job["job"]["state"]
+            if state in ("hecho", "fallido"):
+                break
+            time.sleep(1)
+        self.assertEqual(state, "hecho")
+        status, listing = self.call("GET", "/api/tweets?status=todos&limit=5&pending=0")
+        self.assertTrue(listing["tweets"][0]["has_card"])
+
+    def test_regenerate_and_send_are_queued_by_default(self):
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        card_id = created["card"]["id"]
+
+        status, payload = self.call(
+            "POST", f"/api/cards/{card_id}/regenerate-text", {"provider": "manual", "render": False}
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
+        self.assertEqual(finished.state, "hecho")
+
+        status, payload = self.call(
+            "POST", f"/api/cards/{card_id}/send", {"provider": "local"}
+        )
+        self.assertEqual(status, 202)
+        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
+        self.assertEqual(finished.state, "hecho")
+
+    def test_the_jobs_endpoint_reports_the_queue(self):
+        status, payload = self.call("GET", "/api/jobs")
+        self.assertEqual(status, 200)
+        for key in ("workers", "recent", "busy", "pending", "running"):
+            self.assertIn(key, payload)
+
+    def test_an_unknown_job_is_reported(self):
+        status, payload = self.call("GET", "/api/jobs/987654")
+        self.assertEqual(status, 400)
+        self.assertIn("no existe", payload["error"])
+
+    def test_the_cards_tab_exists_in_the_interface(self):
+        status, body = self.call("GET", "/", raw=True)
+        self.assertIn(b'data-tab="cards"', body)
+        self.assertIn("Procesadas".encode(), body)
 
     def test_cards_have_one_file_per_tweet(self):
         status, created = self.call(
@@ -759,6 +873,9 @@ class AccessControlTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+        # Los hilos de la cola de trabajos deben parar antes de borrar el
+        # directorio temporal: si no, siguen usando la base de datos.
+        self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()

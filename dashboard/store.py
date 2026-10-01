@@ -25,6 +25,7 @@ from .clock import CLOCK
 STATUS_NEW = "nuevo"
 STATUS_SELECTED = "seleccionado"
 STATUS_ANALYZED = "analizado"
+STATUS_PROCESSING = "procesando"
 STATUS_CARD_READY = "tarjeta_lista"
 STATUS_SENT = "enviado"
 STATUS_DISCARDED = "descartado"
@@ -35,6 +36,7 @@ ALL_STATUSES = (
     STATUS_NEW,
     STATUS_SELECTED,
     STATUS_ANALYZED,
+    STATUS_PROCESSING,
     STATUS_CARD_READY,
     STATUS_SENT,
     STATUS_DISCARDED,

@@ -1,4 +1,4 @@
-/* Editor independiente de tarjeta — JavaScript puro, sin dependencias.
+﻿/* Editor independiente de tarjeta — JavaScript puro, sin dependencias.
  *
  * La única operación con IA aquí es «Regenerar texto y caption», que vuelve a
  * generar el titular de arriba, el texto de abajo y el caption. Las imágenes y
@@ -7,6 +7,24 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+
+/**
+ * Iconos en SVG y cargadores accesibles, no emoji.
+ *
+ * El emoji cambia de aspecto según el sistema, no hereda el color del texto y
+ * los lectores de pantalla lo anuncian en voz alta.
+ */
+const ICON = {
+  reloj:
+    `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">` +
+    `<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>`,
+};
+
+/** Indicador de carga con etiqueta para lectores de pantalla. */
+function spinner(label) {
+  return `<span class="spinner" role="status" aria-label="${escapeHtml(label)}"></span>`;
+}
 
 const editor = {
   cardId: null,
@@ -89,10 +107,15 @@ function withBusy(button, label, task) {
   const original = button ? button.textContent : null;
   if (button) {
     button.disabled = true;
-    button.innerHTML = `<span class="spinner"></span> ${escapeHtml(label)}`;
+    button.setAttribute("aria-busy", "true");
+    button.innerHTML = `${spinner(label)} ${escapeHtml(label)}`;
   }
   return Promise.resolve().then(task).finally(() => {
-    if (button) { button.disabled = false; button.textContent = original; }
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = original;
+    }
   });
 }
 
@@ -270,6 +293,22 @@ async function regenerateText() {
           render: true,
         }),
       });
+      // El servidor lo encola: esperamos al trabajo en lugar de bloquear la
+      // petición durante medio minuto.
+      if (payload.queued && payload.job) {
+        $("regen-info").innerHTML =
+          `<span class="pill warn">${spinner("regenerando")}regenerando (trabajo ${payload.job.id})…</span>`;
+        const finished = await waitForJob(payload.job.id);
+        if (!finished || finished.state !== "hecho") {
+          $("regen-info").innerHTML =
+            `<span class="pill off">error</span> ${escapeHtml((finished && finished.detail) || "no terminó")}`;
+          return;
+        }
+        await load();
+        $("regen-info").innerHTML = `<span class="pill ok">texto e imagen actualizados</span>`;
+        toast("Texto y colores regenerados; la tarjeta se ha recompuesto.");
+        return;
+      }
       applyParams(payload.card.params);
       showCard(payload.card);
       const analysis = payload.analysis || {};
@@ -283,6 +322,21 @@ async function regenerateText() {
       toast(error.message, "error");
     }
   });
+}
+
+/** Sigue un trabajo del servidor hasta que termina. */
+async function waitForJob(jobId) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const payload = await api(`/api/jobs/${jobId}`);
+      const job = payload.job;
+      if (job && (job.state === "hecho" || job.state === "fallido")) return job;
+    } catch (error) {
+      continue;
+    }
+  }
+  return null;
 }
 
 async function recompose() {
@@ -314,6 +368,21 @@ async function send() {
           provider: $("f-delivery").value,
         }),
       });
+      // La subida puede tardar: el PNG sin comprimir ronda los 30 MB.
+      if (payload.queued && payload.job) {
+        $("send-result").innerHTML =
+          `<span class="pill warn">${spinner("enviando")}enviando (trabajo ${payload.job.id})…</span>`;
+        const finished = await waitForJob(payload.job.id);
+        if (!finished || finished.state !== "hecho") {
+          $("send-result").innerHTML =
+            `<span class="pill off">error</span> ${escapeHtml((finished && finished.detail) || "no terminó")}`;
+          return;
+        }
+        await loadDeliveries();
+        $("send-result").innerHTML = `<span class="pill ok">entregada</span>`;
+        toast("Entrega completada.");
+        return;
+      }
       const outcome = payload.delivery || {};
       $("send-result").innerHTML =
         `<span class="pill ok">enviado</span> ${escapeHtml(outcome.method || "")}` +
