@@ -151,10 +151,31 @@ class DashboardService:
 
         handles = [account["handle"] for account in accounts]
         if progress is not None:
-            progress.update({"total": len(handles), "done": 0, "current": None, "running": True})
+            progress.update(
+                {"total": len(handles), "done": 0, "current": None, "running": True, "provider": None}
+            )
+
+        def report(payload: dict) -> None:
+            """Refleja el avance del proveedor mientras trabaja.
+
+            El lote del navegador tarda minutos: si no se informa cuenta a
+            cuenta, la interfaz parece congelada en 0 de 24.
+            """
+            if progress is None:
+                return
+            if payload.get("provider"):
+                progress["provider"] = payload["provider"]
+            if payload.get("total"):
+                progress["total"] = payload["total"]
+            if payload.get("handle"):
+                progress["current"] = payload["handle"]
+            if payload.get("index") is not None:
+                progress["done"] = max(0, int(payload["index"]) - 1)
 
         try:
-            batch = timeline_providers.fetch_timelines_batch(handles, provider)
+            batch = timeline_providers.fetch_timelines_batch(
+                handles, provider, on_progress=report
+            )
         except Exception as exc:  # noqa: BLE001 - se informa cuenta por cuenta
             message = str(exc)[:400]
             for account in accounts:
@@ -174,10 +195,11 @@ class DashboardService:
         provider_name = batch["provider"]
         results: list[dict] = []
         total_new = 0
-        for account in accounts:
+        for position, account in enumerate(accounts, 1):
             name = account["handle"]
             if progress is not None:
                 progress["current"] = name
+                progress["done"] = position
             outcome = batch["results"].get(name)
             if isinstance(outcome, Exception):
                 one = self._record_failure(name, str(outcome))
@@ -185,11 +207,9 @@ class DashboardService:
                 one = self._record_success(name, outcome, provider_name, batch.get("attempts"))
             total_new += one["new"]
             results.append(one)
-            if progress is not None:
-                progress["done"] += 1
 
         if progress is not None:
-            progress.update({"current": None, "running": False})
+            progress.update({"current": None, "running": False, "provider": provider_name})
         # Tras cada sondeo se aprovecha para limpiar lo que ya caducó.
         purge = self.maintenance()
         self.store.log(

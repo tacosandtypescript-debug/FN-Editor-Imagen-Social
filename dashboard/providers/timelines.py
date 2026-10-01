@@ -224,12 +224,14 @@ class BrowserTimeline:
             raise resultado
         return resultado
 
-    def fetch_many(self, handles: list[str]) -> dict:
+    def fetch_many(self, handles: list[str], on_progress=None) -> dict:
         """Lee varias cuentas **en una sola sesión de navegador**.
 
         Es importante: abrir y cerrar Chrome una vez por cuenta multiplica el
         tiempo y hace parpadear ventanas sin parar. Con una sesión, el mismo
         navegador recorre las cuentas una detrás de otra.
+
+        Avisa del progreso antes de cada cuenta, porque esto tarda minutos.
 
         Devuelve `{handle: lista}` y, si una cuenta falla, `{handle: excepción}`
         para que un problema puntual no tumbe el resto.
@@ -245,6 +247,7 @@ class BrowserTimeline:
         profile = config.PROFILES_DIR / "x"
         profile.mkdir(parents=True, exist_ok=True)
         results: dict = {}
+        total = len(handles)
 
         with _BROWSER_LOCK:
             try:
@@ -259,7 +262,16 @@ class BrowserTimeline:
                     )
                     try:
                         page = context.pages[0] if context.pages else context.new_page()
-                        for handle in handles:
+                        for position, handle in enumerate(handles, 1):
+                            _notify(
+                                on_progress,
+                                {
+                                    "provider": self.name,
+                                    "handle": handle,
+                                    "index": position,
+                                    "total": total,
+                                },
+                            )
                             try:
                                 results[handle] = self._read_handle(page, handle)
                             except ProviderError as exc:
@@ -431,7 +443,21 @@ def fetch_timeline(handle: str, preferred: str | None = None) -> dict:
     raise ProviderError(f"no se pudo leer @{handle} ({detail})")
 
 
-def fetch_timelines_batch(handles: list[str], preferred: str | None = None) -> dict:
+def _notify(callback, payload: dict) -> None:
+    """Avisa del progreso sin dejar que un fallo del aviso rompa el sondeo."""
+    if callback is None:
+        return
+    try:
+        callback(payload)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def fetch_timelines_batch(
+    handles: list[str],
+    preferred: str | None = None,
+    on_progress=None,
+) -> dict:
     """Lee varias cuentas agrupando cada proveedor en **una sola pasada**.
 
     Dos cosas a la vez, que es lo que interesa:
@@ -440,6 +466,9 @@ def fetch_timelines_batch(handles: list[str], preferred: str | None = None) -> d
       hacerlo por cuenta multiplicaría el tiempo y haría parpadear ventanas.
     * Si una cuenta concreta falla con un proveedor, se reintenta con el
       siguiente sin repetir las que ya salieron bien.
+
+    `on_progress` recibe un aviso por cada cuenta que se empieza a leer: como
+    el lote del navegador tarda minutos, sin esto la interfaz parece colgada.
 
     Devuelve ``{"provider": resumen, "results": {handle: lista|excepcion},
     "used": {handle: proveedor}, "attempts": [...]}``.
@@ -464,12 +493,17 @@ def fetch_timelines_batch(handles: list[str], preferred: str | None = None) -> d
             attempts.append({"provider": name, "ok": False, "detail": status.detail})
             continue
 
+        _notify(on_progress, {"provider": name, "phase": "starting", "total": len(pending)})
         try:
             if hasattr(provider, "fetch_many"):
-                partial = provider.fetch_many(pending)
+                partial = provider.fetch_many(pending, on_progress=on_progress)
             else:
                 partial = {}
-                for handle in pending:
+                for position, handle in enumerate(pending, 1):
+                    _notify(
+                        on_progress,
+                        {"provider": name, "handle": handle, "index": position, "total": len(pending)},
+                    )
                     try:
                         partial[handle] = provider.fetch(handle)
                     except Exception as exc:  # noqa: BLE001

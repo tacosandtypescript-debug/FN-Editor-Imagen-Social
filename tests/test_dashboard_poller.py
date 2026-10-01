@@ -47,10 +47,15 @@ class FakeProvider:
     def status(self):
         return ProviderStatus(self.name, True, "de prueba")
 
-    def fetch_many(self, handles):
+    def fetch_many(self, handles, on_progress=None):
         self.batch_calls.append(list(handles))
-        if self.delay:
-            time.sleep(self.delay)
+        for position, handle in enumerate(handles, 1):
+            if on_progress is not None:
+                on_progress(
+                    {"provider": self.name, "handle": handle, "index": position, "total": len(handles)}
+                )
+            if self.delay:
+                time.sleep(self.delay)
         return {handle: self.results.get(handle, []) for handle in handles}
 
     def fetch(self, handle):
@@ -252,7 +257,7 @@ class PollerTests(unittest.TestCase):
         original_batch = timeline_providers.fetch_timelines_batch
         self.addCleanup(setattr, timeline_providers, "fetch_timelines_batch", original_batch)
 
-        def explode(handles, preferred=None):
+        def explode(handles, preferred=None, on_progress=None):
             raise ProviderError("sin red")
 
         timeline_providers.fetch_timelines_batch = explode
@@ -266,6 +271,62 @@ class PollerTests(unittest.TestCase):
         self.assertEqual(last["new"], 0)
         self.assertTrue(all(not item["ok"] for item in last["accounts"]))
         self.assertIn("sin red", self.service.store.get_account("una")["last_error"])
+
+
+    def test_progress_advances_while_the_batch_is_still_reading(self):
+        """Regresión: el lote tardaba minutos y el progreso se quedaba en 0/24."""
+        seen: list[dict] = []
+
+        def slow_fetch(handles, preferred=None, on_progress=None):
+            for position, handle in enumerate(handles, 1):
+                payload = {"provider": "browser", "handle": handle, "index": position,
+                           "total": len(handles)}
+                if on_progress is not None:
+                    on_progress(payload)
+                seen.append(dict(payload))
+            return {
+                "provider": "browser",
+                "results": {handle: [] for handle in handles},
+                "attempts": [],
+            }
+
+        original = timeline_providers.fetch_timelines_batch
+        self.addCleanup(setattr, timeline_providers, "fetch_timelines_batch", original)
+        timeline_providers.fetch_timelines_batch = slow_fetch
+
+        progress: dict = {}
+        self.service.store.add_account("alpha")
+        self.service.store.add_account("beta")
+        self.service.store.add_account("gamma")
+        expected = [
+            account["handle"] for account in self.service.store.list_accounts(active_only=True)
+        ]
+        self.service.poll(progress=progress)
+
+        # Se avisó de cada cuenta, en el mismo orden en que se van a procesar.
+        self.assertEqual([item["handle"] for item in seen], expected)
+        self.assertIn("alpha", expected)
+        # Y el progreso queda cerrado al terminar.
+        self.assertEqual(progress["total"], len(expected))
+        self.assertEqual(progress["done"], len(expected))
+        self.assertFalse(progress["running"])
+        self.assertIsNone(progress["current"])
+        self.assertEqual(progress["provider"], "browser")
+
+    def test_batch_receives_the_progress_callback(self):
+        received = {}
+
+        def capture(handles, preferred=None, on_progress=None):
+            received["callback"] = on_progress
+            return {"provider": "fake", "results": {h: [] for h in handles}, "attempts": []}
+
+        original = timeline_providers.fetch_timelines_batch
+        self.addCleanup(setattr, timeline_providers, "fetch_timelines_batch", original)
+        timeline_providers.fetch_timelines_batch = capture
+
+        self.service.store.add_account("una")
+        self.service.poll(progress={})
+        self.assertIsNotNone(received.get("callback"), "el lote debe poder informar del avance")
 
 
 class ServicePollTests(unittest.TestCase):
@@ -303,7 +364,7 @@ class ServicePollTests(unittest.TestCase):
 
         original = timeline_providers.fetch_timelines_batch
         self.addCleanup(setattr, timeline_providers, "fetch_timelines_batch", original)
-        timeline_providers.fetch_timelines_batch = lambda handles, preferred=None: {
+        timeline_providers.fetch_timelines_batch = lambda handles, preferred=None, on_progress=None: {
             "provider": "browser",
             "results": {
                 "una": [{"tweet_id": "11", "source_handle": "una", "text": "nueva"}],
