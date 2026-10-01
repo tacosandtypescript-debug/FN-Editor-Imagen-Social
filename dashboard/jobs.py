@@ -98,13 +98,29 @@ class JobQueue:
             thread.start()
             self._threads.append(thread)
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 90.0) -> bool:
+        """Detiene los trabajadores y espera a que terminen.
+
+        La espera es generosa a propósito: un trabajo en curso (análisis con
+        Codex o composición 4K) no se puede interrumpir a mitad, y volver antes
+        de tiempo deja un hilo usando la base de datos mientras el proceso se
+        cierra. Devuelve `True` si todos los trabajadores pararon.
+        """
         self._stop.set()
         for _ in self._threads:
             self._queue.put(None)
         for thread in self._threads:
-            thread.join(timeout=5)
+            thread.join(timeout=timeout)
+        vivos = [thread.name for thread in self._threads if thread.is_alive()]
+        if vivos:
+            import sys
+
+            print(
+                f"aviso: seguían trabajando al cerrar: {', '.join(vivos)}",
+                file=sys.stderr,
+            )
         self._threads = []
+        return not vivos
 
     @property
     def running(self) -> bool:

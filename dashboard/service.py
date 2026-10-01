@@ -99,6 +99,28 @@ class DashboardService:
             )
         return out
 
+    def enqueue_render(self, card_id: int, params: dict | None = None) -> dict:
+        """Encola la recomposición de una tarjeta (por ejemplo, otro formato).
+
+        Recomponer a resolución nativa tarda y descarga medios: se atiende en
+        segundo plano para no dejar al navegador esperando, igual que el resto.
+        """
+        card = self.get_card(card_id)
+        formato = str((params or {}).get("format") or "").strip()
+        label = f"recomponer la tarjeta {card_id}" + (f" en {formato}" if formato else "")
+
+        def trabajo() -> dict:
+            return self.render_card(card_id, params)
+
+        job = self.jobs.submit("recomponer", label, trabajo)
+        self.store.log(
+            f"Encolada la recomposición de la tarjeta {card_id}"
+            + (f" con formato {formato}" if formato else "")
+            + f" (trabajo {job.id})",
+            tweet_id=card["tweet_id"],
+        )
+        return job.as_dict()
+
     def enqueue_regenerate(
         self,
         card_id: int,
@@ -735,10 +757,19 @@ class DashboardService:
         tweet = self.get_tweet(tweet_id)
         settings = config.Settings()
         analysis = tweet.get("analysis") or {}
+        # El formato elegido manda. La sugerencia de la IA solo se usa cuando
+        # se ha pedido «auto»: antes se imponía siempre, así que cada tarjeta
+        # salía con la proporción que a la IA le parecía según las fotos de
+        # origen y era imposible pedir vertical de forma fiable.
+        chosen_format = str(settings.default_format or "auto").strip() or "auto"
+        if chosen_format == "auto":
+            chosen_format = analysis.get("suggested_format") or "auto"
         return {
             "top": analysis.get("top") or _fallback_title(tweet),
             "bottom": analysis.get("bottom") or _fallback_context(tweet),
-            "format": analysis.get("suggested_format") or "auto",
+            "format": chosen_format,
+            "format_is_forced": settings.default_format not in ("", "auto"),
+            "suggested_format": analysis.get("suggested_format") or None,
             "fit": settings.default_fit,
             "style": settings.default_style,
             "resolution": settings.default_resolution,

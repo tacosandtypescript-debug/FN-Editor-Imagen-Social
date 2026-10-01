@@ -432,9 +432,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"cards": self.service.list_cards_view(limit)})
 
     def post_card_render(self, query, card_id: str) -> None:
+        """Recompone una tarjeta. Es lo que permite cambiarle el formato.
+
+        Se encola por el mismo motivo que el resto: componer a resolución
+        nativa tarda y el navegador no debe quedarse esperando.
+        """
         payload = self._read_json()
-        card = self.service.render_card(int(card_id), payload.get("params") or {})
-        self._send_json({"card": card})
+        params = payload.get("params") or {}
+        if payload.get("sync"):
+            self._send_json({"card": self.service.render_card(int(card_id), params)})
+            return
+        job = self.service.enqueue_render(int(card_id), params)
+        self._send_json({"job": job, "queued": True}, status=202)
 
     def post_card_send(self, query, card_id: str) -> None:
         payload = self._read_json()

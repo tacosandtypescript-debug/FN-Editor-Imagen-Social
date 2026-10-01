@@ -332,9 +332,17 @@ class CardParameterTests(unittest.TestCase):
 
     def test_defaults_are_filled_in(self):
         clean = cards_pipeline.normalise_params({"top": "A", "bottom": "B"})
-        self.assertEqual(clean["format"], "auto")
+        # Vertical por defecto: es como se publican. Antes era «auto» y el
+        # formato lo acababa eligiendo la IA para cada publicación.
+        self.assertEqual(clean["format"], "9:16")
         self.assertEqual(clean["resolution"], "4k")
         self.assertIsNone(clean["background"])
+
+    def test_auto_is_still_available_when_asked_for(self):
+        clean = cards_pipeline.normalise_params(
+            {"top": "A", "bottom": "B", "format": "auto"}
+        )
+        self.assertEqual(clean["format"], "auto")
 
     def test_three_accent_colors_are_rejected(self):
         with self.assertRaises(cards_pipeline.CardError):

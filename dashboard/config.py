@@ -238,7 +238,14 @@ class Settings:
     telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
 
     # --- Composición ---------------------------------------------------
-    default_format: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_FORMAT", "auto"))
+    #: Proporción de las tarjetas. **Por defecto vertical**, que es lo que se
+    #: publica. Antes venía en «auto» y el formato lo acababa eligiendo la IA
+    #: de cada publicación según la orientación de las fotos de origen: unas
+    #: salían verticales, otras cuadradas y otras horizontales. Con un valor
+    #: concreto se respeta siempre; «auto» deja decidir al sistema.
+    default_format: str = field(
+        default_factory=lambda: _env("DASHBOARD_DEFAULT_FORMAT", "9:16")
+    )
     default_fit: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_FIT", "auto"))
     default_style: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_STYLE", "auto"))
     default_resolution: str = field(

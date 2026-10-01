@@ -243,6 +243,24 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
    ------------------------------------------------------------------ */
 .tweet.processed .actions { order: 2; gap: 8px; }
 .tweet.processed .card-shot { order: 3; }
+.tweet.processed .format-row { order: 1; }
+
+/* Selector de formato: permite corregir una tarjeta ya compuesta. */
+.format-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+.format-row label { flex: 0 0 auto; }
+.format-row select { flex: 1 1 130px; min-width: 0; }
+.format-row button { flex: 0 0 auto; }
+
+@media (max-width: 700px) {
+  .format-row select { flex: 1 1 100%; }
+  .format-row button { flex: 1 1 100%; }
+}
 
 .tweet.processed .card-shot img {
   max-height: 46vh;

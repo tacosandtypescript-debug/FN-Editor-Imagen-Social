@@ -876,6 +876,33 @@ async function waitForPoller() {
   toast("El sondeo sigue en marcha; revisa la bitácora en un momento.", "error");
 }
 
+/**
+ * Explica qué formato se va a usar y por qué.
+ *
+ * Antes el formato lo imponía la sugerencia de la IA para cada publicación, así
+ * que unas tarjetas salían verticales, otras cuadradas y otras horizontales
+ * sin que se pudiera pedir vertical de forma fiable.
+ */
+function formatNotice(defaults) {
+  if (!defaults || !defaults.format) return "";
+  if (!defaults.format_is_forced) {
+    return defaults.suggested_format
+      ? `<div class="muted" style="margin-top:6px">Formato automático: la IA propone ` +
+        `<strong>${escapeHtml(defaults.suggested_format)}</strong>. Elige uno concreto ` +
+        `para que se respete siempre.</div>`
+      : "";
+  }
+  const aviso = defaults.suggested_format &&
+    defaults.suggested_format !== defaults.format
+    ? ` La IA proponía ${escapeHtml(defaults.suggested_format)} y se ignora.`
+    : "";
+  return (
+    `<div class="muted" style="margin-top:6px">Formato fijado en ` +
+    `<strong>${escapeHtml(defaults.format)}</strong> por el ajuste ` +
+    `<code>DASHBOARD_DEFAULT_FORMAT</code>.` + aviso + `</div>`
+  );
+}
+
 async function analyzeSelected() {
   if (!app.selectedId) return toast("Selecciona una publicación primero.", "error");
   const button = $("btn-analyze");
@@ -893,7 +920,8 @@ async function analyzeSelected() {
       const analysis = payload.tweet.analysis || {};
       $("analysis-info").innerHTML =
         `<span class="pill ok">${escapeHtml(analysis.provider)}</span>` +
-        `<div class="muted" style="margin-top:6px">${escapeHtml(analysis.reasoning || "")}</div>`;
+        `<div class="muted" style="margin-top:6px">${escapeHtml(analysis.reasoning || "")}</div>` +
+        formatNotice(defaults);
       toast("Análisis aplicado al formulario.");
       await loadTweets();
     } catch (error) {
@@ -1057,6 +1085,7 @@ function renderCards(cards) {
         <div class="small muted">${escapeHtml(String(meta.width || "?"))}×${escapeHtml(String(meta.height || "?"))}
           · ${escapeHtml(String(meta.output_format || ""))}</div>
         ${entrega}
+        ${formatPicker(card)}
         <div class="actions">
           <button class="small accent" data-editor="${escapeHtml(String(card.id))}">Abrir editor</button>
           <button class="small" data-regen="${escapeHtml(String(card.id))}">Regenerar texto</button>
@@ -1065,6 +1094,53 @@ function renderCards(cards) {
         </div>
       </div>`;
   }).join("");
+}
+
+/**
+ * Selector de formato con su botón, para corregir una tarjeta ya hecha.
+ *
+ * Antes, si una tarjeta salía cuadrada u horizontal, no había forma de
+ * arreglarla desde aquí: había que abrir el editor de esa publicación.
+ */
+function formatPicker(card) {
+  const actual = String((card.params || {}).format || "");
+  const opciones = [
+    ["9:16", "9:16 vertical"],
+    ["1:1", "1:1 cuadrado"],
+    ["16:9", "16:9 horizontal"],
+  ];
+  const lista = opciones
+    .map(([valor, texto]) =>
+      `<option value="${valor}"${valor === actual ? " selected" : ""}>${texto}</option>`)
+    .join("");
+  return `
+    <div class="format-row">
+      <label class="small muted" for="fmt-${card.id}">Formato</label>
+      <select id="fmt-${card.id}" data-format-for="${escapeHtml(String(card.id))}">${lista}</select>
+      <button class="small" data-recompose="${escapeHtml(String(card.id))}">Cambiar formato</button>
+    </div>`;
+}
+
+/** Recompone una tarjeta con el formato elegido. */
+async function recomposeCard(cardId, button) {
+  const select = document.querySelector(`[data-format-for="${cardId}"]`);
+  const formato = select ? select.value : "9:16";
+  await withBusy(button, "Encolando…", async () => {
+    try {
+      const payload = await api(`/api/cards/${cardId}/render`, {
+        method: "POST",
+        body: JSON.stringify({ params: { format: formato } }),
+      });
+      toast(`Recomponiendo en ${formato} (trabajo ${payload.job.id}).`);
+      const finished = await waitForJob(payload.job.id);
+      await loadCards();
+      if (finished && finished.state === "hecho") {
+        toast(`Tarjeta recompuesta en ${formato}.`);
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
 }
 
 /** Regenera el texto de una tarjeta ya creada (encolado, sin bloquear). */
@@ -1160,6 +1236,7 @@ document.addEventListener("click", async (event) => {
   if (target.id === "btn-refresh-cards") return loadCards().catch((e) => toast(e.message, "error"));
 
   if (dataset.regen) return regenerateCard(dataset.regen, target);
+  if (dataset.recompose) return recomposeCard(dataset.recompose, target);
   if (dataset.send) return sendCardFromList(dataset.send, target);
   if (target.id === "btn-analyze") return analyzeSelected();
   if (target.id === "btn-generate") return generateCard();

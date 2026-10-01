@@ -35,7 +35,7 @@ original_analyse = analysis_providers.analyse_tweet
 
 class DashboardIntegrationTests(unittest.TestCase):
     def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
+        self._temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
@@ -102,7 +102,7 @@ class DashboardIntegrationTests(unittest.TestCase):
         card = self.service.prepare_card(
             self.tweet_id,
             {"top": "NUEVO {MAPA|8B3DFF}", "bottom": "FORTNITEMARES · 01/10",
-             "resolution": "native", "backend": "cpu"},
+             "format": "auto", "resolution": "native", "backend": "cpu"},
         )
         self.assertEqual(card["version"], 1)
         self.assertTrue(card["meta"]["verification"]["ok"])
@@ -111,9 +111,24 @@ class DashboardIntegrationTests(unittest.TestCase):
         with Image.open(path) as image:
             self.assertEqual(image.format, "PNG")
             self.assertEqual(image.mode, "RGBA")
-            # Fuente 640x360 (horizontal) -> preset 16:9 del repositorio.
+            # Con «auto», la fuente 640x360 (horizontal) lleva al preset 16:9
+            # del repositorio: el modo automático sigue funcionando.
             self.assertEqual((image.width, image.height), (1920, 1080))
         self.assertEqual(self.service.get_tweet(self.tweet_id)["status"], "tarjeta_lista")
+
+    def test_the_default_render_is_vertical(self):
+        """Sin pedir nada, la tarjeta sale vertical aunque la fuente sea ancha.
+
+        Antes el formato lo imponía la sugerencia de la IA según las fotos de
+        origen, así que la misma publicación podía salir cuadrada.
+        """
+        card = self.service.prepare_card(
+            self.tweet_id,
+            {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"},
+        )
+        with Image.open(Path(card["output_path"])) as image:
+            self.assertEqual((image.width, image.height), (1080, 1920))
+        self.assertEqual(card["params"]["format"], "9:16")
 
     def test_prepare_card_reuses_the_same_card(self):
         first = self.service.prepare_card(
@@ -464,7 +479,7 @@ class DashboardIntegrationTests(unittest.TestCase):
 
 class DashboardHttpTests(unittest.TestCase):
     def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
+        self._temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
@@ -837,6 +852,57 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("no existe", payload["error"])
 
+    def test_a_card_can_be_recomposed_in_another_format(self):
+        """El botón que faltaba: corregir el formato de una tarjeta ya hecha."""
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "format": "16:9",
+                        "resolution": "native", "backend": "cpu"}},
+        )
+        self.assertEqual(status, 201)
+        card_id = created["card"]["id"]
+        self.assertEqual(
+            (created["card"]["meta"]["width"], created["card"]["meta"]["height"]),
+            (1920, 1080),
+        )
+
+        # Se cambia a vertical, que es lo que se publica.
+        status, payload = self.call(
+            "POST", f"/api/cards/{card_id}/render", {"params": {"format": "9:16"}}
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        self.assertIn("9:16", payload["job"]["label"])
+        finished = self.service.jobs.wait(payload["job"]["id"], timeout=180)
+        self.assertEqual(finished.state, "hecho", finished.detail)
+        # `render_card` devuelve la tarjeta ya recompuesta.
+        card = finished.result
+        self.assertEqual((card["meta"]["width"], card["meta"]["height"]), (1080, 1920))
+        self.assertEqual(card["params"]["format"], "9:16")
+
+    def test_recomposing_keeps_one_working_card_per_tweet(self):
+        """Cambiar el formato recompone, no acumula copias."""
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        card_id = created["card"]["id"]
+        for formato in ("1:1", "9:16"):
+            status, payload = self.call(
+                "POST", f"/api/cards/{card_id}/render",
+                {"params": {"format": formato}, "sync": True},
+            )
+            self.assertEqual(status, 200)
+        status, listing = self.call("GET", "/api/cards?limit=20")
+        self.assertEqual(len(listing["cards"]), 1, "debe seguir habiendo una sola tarjeta")
+
+    def test_the_interface_offers_a_format_button(self):
+        status, body = self.call("GET", "/static/app.js", raw=True)
+        self.assertIn(b"data-recompose", body)
+        self.assertIn(b"Cambiar formato", body)
+
     def test_the_cards_tab_exists_in_the_interface(self):
         status, body = self.call("GET", "/", raw=True)
         self.assertIn(b'data-tab="cards"', body)
@@ -923,7 +989,7 @@ class AccessControlTests(unittest.TestCase):
     """El dashboard puede quedar expuesto a la red local: debe pedir clave."""
 
     def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
+        self._temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)

@@ -112,7 +112,7 @@ class JobQueueTests(unittest.TestCase):
 
 class ServiceQueueTests(unittest.TestCase):
     def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
+        self._temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)

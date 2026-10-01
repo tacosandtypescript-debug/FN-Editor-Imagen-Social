@@ -23,7 +23,10 @@ from . import repo
 ALLOWED_FITS = ("auto", "cover", "contain")
 ALLOWED_RESOLUTIONS = ("native", "4k")
 ALLOWED_BACKENDS = ("auto", "cpu", "gpu")
-ALLOWED_FORMATS = ("auto", "9:16", "1:1", "4:5", "16:9")
+#: Solo los formatos que tienen preset real en `bin/`. Estaba también 4:5, que
+#: no tiene preset propio: al elegirlo se componía en 9:16 sin avisar, así que
+#: la interfaz ofrecía algo que no cumplía.
+ALLOWED_FORMATS = ("auto", "9:16", "1:1", "16:9")
 
 
 class CardError(RuntimeError):
