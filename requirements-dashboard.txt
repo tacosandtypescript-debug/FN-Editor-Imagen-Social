@@ -1,0 +1,15 @@
+# Dependencias OPCIONALES del dashboard.
+#
+# `requirements.txt` no se toca: un test del repositorio exige que contenga
+# exactamente Pillow y python-xlib. El núcleo del dashboard funciona solo con
+# la biblioteca estándar más Pillow y Nitter como fuente de descubrimiento.
+#
+# Instala esto únicamente si quieres activar los proveedores de navegador:
+#   * descubrimiento de la timeline leyendo x.com en Chrome
+#   * análisis conduciendo chatgpt.com con tu sesión iniciada
+#
+#   pip install -r requirements-dashboard.txt
+#
+# No hace falta descargar Chromium: el código usa el Chrome ya instalado
+# (channel="chrome"), así que no se ejecuta `playwright install`.
+playwright==1.63.0

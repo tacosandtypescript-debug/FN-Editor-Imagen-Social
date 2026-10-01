@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EditImg Dashboard</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>EditImg Dashboard</h1>
+    <span>tarjetas de Fortnite · sobre el flujo existente</span>
+  </div>
+  <div class="spacer"></div>
+  <div id="provider-pills" class="row"></div>
+  <button id="btn-poll" class="primary">Buscar ahora</button>
+  <button id="btn-refresh" class="ghost small">Refrescar</button>
+</header>
+
+<nav class="tabs">
+  <button data-tab="inbox" class="active">Bandeja</button>
+  <button data-tab="editor">Editor</button>
+  <button data-tab="accounts">Cuentas</button>
+  <button data-tab="settings">Estado y ajustes</button>
+  <button data-tab="log">Bitácora</button>
+</nav>
+
+<main>
+
+  <!-- ============ BANDEJA ============ -->
+  <section id="tab-inbox">
+    <div class="panel">
+      <h2>Bandeja de publicaciones</h2>
+      <div class="row">
+        <div style="min-width:190px">
+          <label for="filter-status">Estado</label>
+          <select id="filter-status">
+            <option value="todos">Todos</option>
+            <option value="nuevo">Nuevo</option>
+            <option value="seleccionado">Seleccionado</option>
+            <option value="analizado">Analizado</option>
+            <option value="tarjeta_lista">Tarjeta lista</option>
+            <option value="enviado">Enviado</option>
+            <option value="descartado">Descartado</option>
+            <option value="fallido">Fallido</option>
+          </select>
+        </div>
+        <div style="min-width:190px">
+          <label for="filter-account">Cuenta</label>
+          <select id="filter-account"><option value="">Todas</option></select>
+        </div>
+        <div style="min-width:190px">
+          <label for="filter-limit">Mostrar</label>
+          <select id="filter-limit">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="300">300</option>
+          </select>
+        </div>
+        <div class="spacer"></div>
+        <div id="counts" class="row small muted"></div>
+      </div>
+      <p class="small muted" style="margin-bottom:0">
+        El sistema <strong>no</strong> convierte nada automáticamente: primero trae las
+        publicaciones y tú eliges cuáles se convierten en tarjeta.
+      </p>
+    </div>
+    <div id="inbox" class="grid cols-3"></div>
+  </section>
+
+  <!-- ============ EDITOR ============ -->
+  <section id="tab-editor" hidden>
+    <div id="editor-empty" class="empty">
+      Selecciona una publicación en la bandeja para analizarla y crear su tarjeta.
+    </div>
+
+    <div id="editor-body" class="grid cols-2" hidden>
+      <div>
+        <div class="panel">
+          <h2>Publicación</h2>
+          <div id="editor-tweet"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Texto y composición</h2>
+          <div class="field">
+            <label for="f-top">Titular (--top) · máx. 2 palabras con {PALABRA|COLOR}</label>
+            <textarea id="f-top"></textarea>
+          </div>
+          <div class="field">
+            <label for="f-bottom">Contexto (--bottom)</label>
+            <textarea id="f-bottom"></textarea>
+          </div>
+          <div class="row">
+            <div style="flex:1;min-width:120px">
+              <label for="f-format">Formato</label>
+              <select id="f-format">
+                <option value="auto">auto</option>
+                <option value="9:16">9:16 vertical</option>
+                <option value="1:1">1:1 cuadrado</option>
+                <option value="16:9">16:9 horizontal</option>
+                <option value="4:5">4:5</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:110px">
+              <label for="f-fit">Ajuste</label>
+              <select id="f-fit">
+                <option value="auto">auto</option>
+                <option value="cover">cover</option>
+                <option value="contain">contain</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:110px">
+              <label for="f-resolution">Resolución</label>
+              <select id="f-resolution">
+                <option value="4k">4k</option>
+                <option value="native">native</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div style="flex:2;min-width:150px">
+              <label for="f-style">Estilo de collage</label>
+              <select id="f-style"></select>
+            </div>
+            <div style="flex:1;min-width:100px">
+              <label for="f-backend">Backend</label>
+              <select id="f-backend">
+                <option value="auto">auto</option>
+                <option value="cpu">cpu</option>
+                <option value="gpu">gpu</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button id="btn-generate" class="primary">Generar tarjeta</button>
+            <button id="btn-render" class="accent" disabled>Volver a componer</button>
+            <span class="spacer"></span>
+            <span id="render-info" class="small muted"></span>
+          </div>
+          <p class="small muted" style="margin-bottom:0">
+            Se usa el compositor canónico <code>bin/compose_image.py</code> con las
+            mismas opciones del flujo de Telegram.
+          </p>
+        </div>
+
+        <div class="panel">
+          <h2>Entrega</h2>
+          <div class="field">
+            <label for="f-caption">Caption (los hashtags van aquí, nunca dentro de la imagen)</label>
+            <textarea id="f-caption"></textarea>
+          </div>
+          <div class="row">
+            <div style="flex:1;min-width:150px">
+              <label for="f-delivery">Destino</label>
+              <select id="f-delivery">
+                <option value="auto">auto (Telegram si está configurado)</option>
+                <option value="telegram">Telegram (sendDocument)</option>
+                <option value="local">solo guardar el archivo</option>
+              </select>
+            </div>
+            <div style="align-self:flex-end">
+              <button id="btn-send" class="accent" disabled>Enviar a Telegram</button>
+            </div>
+          </div>
+          <div id="send-result" class="small" style="margin-top:10px"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>Previsualización</h2>
+          <div id="preview" class="preview">
+            <span class="muted">Todavía no hay tarjeta generada.</span>
+          </div>
+          <div id="preview-meta" class="small muted" style="margin-top:10px"></div>
+          <div class="row" style="margin-top:10px">
+            <a id="download-link" class="small" href="#" download hidden>Descargar PNG</a>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Análisis</h2>
+          <div class="row">
+            <div style="flex:1;min-width:150px">
+              <label for="f-analysis">Proveedor de análisis</label>
+              <select id="f-analysis"></select>
+            </div>
+            <div style="align-self:flex-end">
+              <button id="btn-analyze" class="primary">Analizar con IA</button>
+            </div>
+          </div>
+          <div id="analysis-info" class="small" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CUENTAS ============ -->
+  <section id="tab-accounts" hidden>
+    <div class="panel">
+      <h2>Añadir cuenta de X</h2>
+      <form id="form-account" class="row">
+        <div style="flex:1;min-width:220px">
+          <input id="account-handle" placeholder="@cuenta o https://x.com/cuenta" autocomplete="off">
+        </div>
+        <button class="primary" type="submit">Añadir</button>
+      </form>
+      <p class="small muted" style="margin-bottom:0">
+        Se guardan en la base de datos local y se revisan automáticamente según el intervalo.
+      </p>
+    </div>
+    <div class="panel">
+      <h2>Cuentas monitoreadas</h2>
+      <div id="accounts"></div>
+    </div>
+  </section>
+
+  <!-- ============ AJUSTES ============ -->
+  <section id="tab-settings" hidden>
+    <div class="grid cols-2">
+      <div class="panel">
+        <h2>Proveedores</h2>
+        <div id="providers"></div>
+      </div>
+      <div class="panel">
+        <h2>Ajustes efectivos</h2>
+        <div id="settings"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Cómo se reutiliza el repositorio</h2>
+      <ul class="small muted">
+        <li>Composición: <code>bin/compose_image.py</code> (sin modificarlo).</li>
+        <li>Descarga de medios: <code>bin/fetch_media.py</code> (orden, límite de 25 MB y validación originales).</li>
+        <li>Preset automático y validación de salida: funciones de <code>bin/edit_link.py</code>.</li>
+        <li>Entrega: PNG como documento (<code>sendDocument</code>), como indica el repositorio.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ BITÁCORA ============ -->
+  <section id="tab-log" hidden>
+    <div class="panel">
+      <h2>Bitácora</h2>
+      <div id="events" class="log"></div>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

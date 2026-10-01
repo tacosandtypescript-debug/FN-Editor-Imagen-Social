@@ -39,3 +39,10 @@ Thumbs.db
 Desktop.ini
 *.swp
 *.swo
+
+# Dashboard: estado local, perfiles de navegador y tarjetas generadas.
+# `dashboard/.env` ya queda cubierto por la regla `.env` de arriba.
+dashboard/var/
+dashboard/.env
+# La plantilla sí se versiona: es la que se copia a `dashboard/.env`.
+!dashboard/.env.example

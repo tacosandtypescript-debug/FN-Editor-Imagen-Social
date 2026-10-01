@@ -1,0 +1,213 @@
+"""Configuración del dashboard.
+
+Todo se resuelve con la biblioteca estándar para no alterar
+`requirements.txt`. Los valores se leen en este orden de prioridad:
+
+1. variables de entorno reales,
+2. archivo `dashboard/.env` (ignorado por Git),
+3. valores por defecto de este módulo,
+4. ajustes guardados en la base de datos (cambiables desde la interfaz).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BIN_DIR = ROOT / "bin"
+DASHBOARD_DIR = Path(__file__).resolve().parent
+WEB_DIR = DASHBOARD_DIR / "web"
+VAR_DIR = DASHBOARD_DIR / "var"
+ENV_FILE = DASHBOARD_DIR / ".env"
+
+DB_PATH = VAR_DIR / "dashboard.sqlite3"
+MEDIA_DIR = VAR_DIR / "media"
+CARDS_DIR = VAR_DIR / "cards"
+PROFILES_DIR = VAR_DIR / "profiles"
+LOGS_DIR = VAR_DIR / "logs"
+
+#: Presets del repositorio por proporción de salida.
+PRESETS = {
+    "9:16": BIN_DIR / "preset.json",
+    "1:1": BIN_DIR / "preset_square.json",
+    "16:9": BIN_DIR / "preset_horizontal.json",
+}
+
+#: Instancias Nitter conocidas. Son inestables por naturaleza: el proveedor
+#: rota entre ellas y descarta las que fallan en tiempo de ejecución.
+DEFAULT_NITTER_INSTANCES = (
+    "https://nitter.kareem.one",
+    "https://nitter.privacyredirect.com",
+    "https://nitter.tiekoetter.com",
+)
+
+
+def load_env_file(path: Path = ENV_FILE) -> dict[str, str]:
+    """Lee un `.env` sencillo (KEY=VALOR) sin dependencias externas."""
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+def _env(name: str, default: str = "") -> str:
+    """Entorno real primero, luego `.env`, luego el valor por defecto."""
+    value = os.environ.get(name)
+    if value is not None and value != "":
+        return value
+    return _FILE_ENV.get(name, default)
+
+
+_FILE_ENV = load_env_file()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = _env(name, "1" if default else "0").strip().lower()
+    return raw in {"1", "true", "yes", "si", "sí", "on"}
+
+
+def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = _env(name, "").strip()
+    if not raw:
+        return default
+    parts = [item.strip() for item in raw.split(",") if item.strip()]
+    return tuple(parts) or default
+
+
+@dataclass
+class Settings:
+    """Ajustes efectivos del dashboard."""
+
+    host: str = field(default_factory=lambda: _env("DASHBOARD_HOST", "127.0.0.1"))
+    port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 8765))
+
+    # --- Descubrimiento de publicaciones -------------------------------
+    timeline_provider: str = field(
+        default_factory=lambda: _env("DASHBOARD_TIMELINE_PROVIDER", "browser")
+    )
+    poll_interval_seconds: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_POLL_INTERVAL", 900)
+    )
+    poll_on_start: bool = field(
+        default_factory=lambda: _env_bool("DASHBOARD_POLL_ON_START", True)
+    )
+    nitter_instances: tuple[str, ...] = field(
+        default_factory=lambda: _env_list("DASHBOARD_NITTER_INSTANCES", DEFAULT_NITTER_INSTANCES)
+    )
+    browser_headless: bool = field(
+        default_factory=lambda: _env_bool("DASHBOARD_BROWSER_HEADLESS", False)
+    )
+    browser_channel: str = field(
+        default_factory=lambda: _env("DASHBOARD_BROWSER_CHANNEL", "chrome")
+    )
+    browser_timeout_ms: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_BROWSER_TIMEOUT_MS", 45000)
+    )
+    browser_settle_ms: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_BROWSER_SETTLE_MS", 9000)
+    )
+    browser_max_scrolls: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_BROWSER_MAX_SCROLLS", 2)
+    )
+    x_api_bearer: str = field(default_factory=lambda: _env("X_API_BEARER_TOKEN", ""))
+
+    # --- Análisis / redacción -----------------------------------------
+    analysis_provider: str = field(
+        default_factory=lambda: _env("DASHBOARD_ANALYSIS_PROVIDER", "openai")
+    )
+    openai_base_url: str = field(
+        default_factory=lambda: _env("DASHBOARD_OPENAI_BASE_URL", "https://api.openai.com/v1")
+    )
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
+    openai_model: str = field(
+        default_factory=lambda: _env("DASHBOARD_OPENAI_MODEL", "gpt-4o-mini")
+    )
+    analysis_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_ANALYSIS_TIMEOUT", 120)
+    )
+
+    # --- Telegram ------------------------------------------------------
+    telegram_bot_token: str = field(default_factory=lambda: _env("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
+
+    # --- Composición ---------------------------------------------------
+    default_format: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_FORMAT", "auto"))
+    default_fit: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_FIT", "auto"))
+    default_style: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_STYLE", "auto"))
+    default_resolution: str = field(
+        default_factory=lambda: _env("DASHBOARD_DEFAULT_RESOLUTION", "4k")
+    )
+    default_backend: str = field(
+        default_factory=lambda: _env("DASHBOARD_DEFAULT_BACKEND", "auto")
+    )
+
+
+def ensure_directories() -> None:
+    """Crea el árbol de trabajo local (ignorado por Git)."""
+    for path in (VAR_DIR, MEDIA_DIR, CARDS_DIR, PROFILES_DIR, LOGS_DIR):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def preset_for_format(output_format: str | None) -> Path:
+    """Devuelve el preset del repositorio para una proporción dada."""
+    key = str(output_format or "").strip()
+    return PRESETS.get(key, PRESETS["9:16"])
+
+
+def redacted(settings: Settings) -> dict:
+    """Vista pública de los ajustes, sin exponer credenciales completas."""
+    def mask(value: str) -> str:
+        if not value:
+            return ""
+        if len(value) <= 6:
+            return "•••"
+        return f"{value[:3]}•••{value[-2:]}"
+
+    return {
+        "host": settings.host,
+        "port": settings.port,
+        "timeline_provider": settings.timeline_provider,
+        "poll_interval_seconds": settings.poll_interval_seconds,
+        "poll_on_start": settings.poll_on_start,
+        "nitter_instances": list(settings.nitter_instances),
+        "browser_headless": settings.browser_headless,
+        "browser_channel": settings.browser_channel,
+        "x_api_bearer_set": bool(settings.x_api_bearer),
+        "analysis_provider": settings.analysis_provider,
+        "openai_base_url": settings.openai_base_url,
+        "openai_model": settings.openai_model,
+        "openai_api_key_set": bool(settings.openai_api_key),
+        "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
+        "telegram_chat_id_masked": mask(settings.telegram_chat_id),
+        "default_format": settings.default_format,
+        "default_fit": settings.default_fit,
+        "default_style": settings.default_style,
+        "default_resolution": settings.default_resolution,
+        "default_backend": settings.default_backend,
+        "presets": {key: str(path) for key, path in PRESETS.items()},
+    }

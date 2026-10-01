@@ -221,6 +221,24 @@ entrega el PNG. `prepare_link.py` permite separar la descarga y devolver
 `post_text` en JSON antes de componer; `edit_link.py` es la variante de una sola
 orden cuando el agente ya tiene el texto.
 
+## Dashboard web (opcional)
+
+`dashboard/` añade una capa de organización **por encima** de este flujo; no lo
+sustituye ni modifica ninguna pieza existente. Automatiza el descubrimiento de
+publicaciones de cuentas de X, deja elegir cuáles se convierten en tarjeta,
+permite editar y recomponer antes de enviar y entrega el PNG a Telegram como
+documento.
+
+```bash
+python -m dashboard            # http://127.0.0.1:8765/
+```
+
+El núcleo solo necesita la biblioteca estándar y Pillow, así que
+`requirements.txt` no cambia; el descubrimiento por navegador y el análisis con
+la sesión de ChatGPT son opcionales y se activan con
+`requirements-dashboard.txt`. Consulta `dashboard/README.md` para la
+configuración, los proveedores y sus límites.
+
 ## Pruebas
 
 ```bash
