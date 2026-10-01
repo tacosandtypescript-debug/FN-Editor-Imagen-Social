@@ -1,16 +1,20 @@
 # EditImg Dashboard
 
-Capa de organización **por encima** del flujo que ya existe en el repositorio.
-No lo sustituye ni lo modifica: lo orquesta y lo automatiza.
+**Visor de publicaciones.** Trae lo que publican las cuentas de X que sigas y lo
+enseña para mirarlo: imágenes y vídeos, con tres botones por publicación.
 
 ```
 Cuentas de X → búsqueda automática → publicaciones nuevas → dashboard
-   → selección manual → análisis con IA → generación de tarjeta
-   → edición/revisión → envío a Telegram
+   → Ver original · Copiar enlace · Marcar listo
 ```
 
-Nada se convierte en tarjeta automáticamente. El sistema trae las
-publicaciones y **tú eliges** cuáles se convierten.
+Cada publicación se puede **abrir en X**, **copiar su enlace** o **marcar como
+lista**. Marcar como lista es lo que la salva de la limpieza automática.
+
+> Este dashboard **ya no genera tarjetas**. Tuvo editor, análisis con IA,
+> composición y envío a Telegram, y todo eso se retiró: eran demasiados botones
+> para lo que se hace a diario. El compositor sigue en `bin/` del repositorio,
+> intacto; simplemente ya no se usa desde aquí.
 
 ---
 
@@ -40,18 +44,12 @@ El núcleo funciona **solo con la biblioteca estándar y Pillow**, así que
 
 | Pieza | Origen | Cómo se usa |
 |---|---|---|
-| Composición | `bin/compose_image.py` | Se invoca como proceso, igual que hoy |
-| Descarga de medios | `bin/fetch_media.py` | Orden, límite de 25 MB y validación originales |
-| Comando del compositor | `edit_link.build_composer_command` | Se reutiliza tal cual |
-| Preset automático | `edit_link.select_auto_preset` | Elige 9:16 / 1:1 / 16:9 por orientación |
-| Validación de salida | `edit_link.validate_rendered_output` | Verifica formato, modo y dimensiones |
-| Límites | `bin/runtime_config.py` | `DEFAULT_MAX_IMAGES` y compañía |
-| Reglas editoriales | `.hermes.md` y las `SKILL.md` | Codificadas en el prompt y en el saneado |
-| Paleta y marca | `bin/preset*.json` | Leídas del preset real, no duplicadas |
+| Lectura del post | `bin/fetch_media.py` | Se carga por ruta, sin modificarlo: da texto, medios y fecha |
+| Miniaturas | CDN de X | Se pide la variante de 360 px en lugar del original |
 
-**No se ha modificado** ningún archivo existente de `bin/`, los presets, las
-fuentes, las skills ni los tests originales. Los 51 tests previos siguen
-pasando.
+**No se ha modificado** ningún archivo de `bin/`, los presets, las fuentes, las
+skills ni los tests originales del repositorio. El compositor de tarjetas sigue
+ahí y sus tests siguen pasando; este dashboard simplemente ya no lo llama.
 
 ---
 
@@ -60,24 +58,19 @@ pasando.
 ```
 dashboard/
   config.py              ajustes, rutas y lectura de .env
-  store.py               SQLite: cuentas, publicaciones, tarjetas, entregas
-  service.py             lógica del flujo (sin HTTP, testeable)
+  store.py               SQLite: cuentas y publicaciones (con su estado)
+  service.py             lógica del visor (sin HTTP, testeable)
   server.py              servidor HTTP y API JSON (biblioteca estándar)
   poller.py              sondeo automático en segundo plano
-  pipeline/
-    repo.py              carga bin/*.py sin modificarlos
-    media.py             descarga y sondeo de medios
-    cards.py             composición y validación
+  posts.py               lee texto, medios y fecha real de una publicación
   providers/
     base.py              interfaces comunes
     timelines.py         descubrimiento: navegador / Nitter / X API
-    analysis.py          análisis: OpenAI-compatible / ChatGPT / manual
-    telegram.py          entrega: Bot API (sendDocument) / archivo local
   web/                   interfaz (HTML + CSS + JS sin dependencias)
 ```
 
-Cada capacidad vive detrás de una interfaz propia: cambiar el proveedor de
-análisis no toca el de descubrimiento ni el de entrega.
+Cada capacidad vive detrás de una interfaz propia: cambiar la forma de descubrir
+publicaciones no toca el almacén ni la interfaz.
 
 ---
 
@@ -99,108 +92,6 @@ por Nitter y una por navegador, sin ningún fallo.
 > (`DASHBOARD_BROWSER_HEADLESS=0`), que además permite iniciar sesión una vez y
 > que el perfil la recuerde.
 
-### Análisis
-
-| Proveedor | Requiere | Estado |
-|---|---|---|
-| `openai` | clave de API **o** un modelo local | Por defecto y recomendado |
-| `chatgpt` | Playwright + sesión iniciada en chatgpt.com | Experimental |
-| `manual` | nada | Redactas tú; siempre funciona |
-
-El prompt del sistema aplica las reglas del repositorio: titular de 3 a 12
-palabras, color solo en palabras con carga semántica, como máximo dos acentos y
-cinco hashtags únicos incluyendo `#khetzalgg`.
-
-**Sin etiquetas de plantilla en el texto de abajo.** El prompt llegó a mostrar
-`"bottom": "CONTEXTO · DD/MM"` como ejemplo, y el modelo copiaba ese patrón: en
-las tarjetas reales apareció `PRIMERA ACTUALIZACIÓN · 01/10` y otros cuatro
-textos acababan igual en `· DD/MM`. Ahora el ejemplo no lleva fecha, la regla
-prohíbe expresamente las etiquetas fijas y las fechas inventadas, y el texto de
-reserva es `CONTEXTO PENDIENTE` en lugar de `NOTICIA FORTNITE · DD/MM`.
-
-**La respuesta del CLI debe ser JSON válido.** Si llega mal formado —texto
-alrededor, markdown o llaves sin cerrar— se reintenta **una vez** con una
-indicación explícita antes de mostrar el error. También se reintenta cuando el
-JSON es correcto pero no cumple el contrato (por ejemplo, si no trae tres pares
-distintos).
-
-**Ninguna propuesta ofrecida puede fallar al componer.** El compositor tiene un
-límite duro: el texto debe caber en 960 px, que en la práctica son unos 55
-caracteres en el texto de abajo y unos 50 en el titular. Se midió en real que el
-modelo llegaba a escribir 90 caracteres, y que la composición fallaba **después**
-de que el usuario eligiera. Por eso cada propuesta se mide antes de mostrarla con
-`fit_block` —la misma función que usa `bin/compose_image.py`, no una copia— y las
-que no caben se descartan. Si quedan menos de tres, se pide otro trío más corto;
-si solo cabe una, se ofrece una. El panel avisa de cuántas se descartaron.
-
-**Los límites van escritos en el prompt**: máximo 48 caracteres en `top` y 52 en
-`bottom`. Son algo más estrictos que el límite medido, para que el margen cubra
-letras anchas y mayúsculas acentuadas.
-
-### Entrega
-
-| Proveedor | Requiere |
-|---|---|
-| `telegram` | `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` |
-| `local` | nada; deja el archivo en `dashboard/var/cards/` |
-
-La entrega usa **`sendDocument`**, nunca `sendPhoto`, tal y como exige la regla
-del repositorio: el PNG viaja sin comprimir.
-
----
-
-## Sobre la suscripción de ChatGPT
-
-Es la pregunta importante y conviene ser claro.
-
-**Una suscripción de ChatGPT (Plus, Pro…) no incluye acceso a la API.** Son
-productos y facturaciones distintas. No existe una forma oficial de «usar tu
-suscripción» desde un programa.
-
-Lo que sí se puede hacer, y está implementado:
-
-1. **Proveedor `chatgpt` (experimental).** Abre `chatgpt.com` en Chrome con un
-   perfil propio, escribe el prompt y lee la respuesta. **Esto sí consume tu
-   suscripción** y no cuesta nada por uso. A cambio:
-   - depende del marcado de una web ajena: cuando OpenAI lo cambie, dejará de
-     funcionar hasta ajustarlo;
-   - es más lento que una API;
-   - la automatización de la interfaz puede toparse con límites de uso.
-
-   Para activarlo:
-
-   ```powershell
-   pip install -r requirements-dashboard.txt
-   python -m dashboard
-   ```
-
-   Después abre el perfil `dashboard/var/profiles/chatgpt` con Chrome, inicia
-   sesión **una vez**, y elige el proveedor `chatgpt` en el editor. Si no hay
-   sesión, el dashboard lo detecta y te lo dice con un mensaje claro.
-
-2. **Proveedor `openai` con un modelo local (la opción estable y gratis).**
-   Cualquier servidor compatible con OpenAI sirve. Con Ollama:
-
-   ```
-   DASHBOARD_ANALYSIS_PROVIDER=openai
-   DASHBOARD_OPENAI_BASE_URL=http://localhost:11434/v1
-   DASHBOARD_OPENAI_MODEL=llama3.1
-   OPENAI_API_KEY=local
-   ```
-
-   Sin coste por uso, sin depender de terceros y sin que se rompa cuando cambie
-   una web. Para este caso de uso (un titular corto y un caption) un modelo
-   local pequeño va sobrado.
-
-3. **Proveedor `openai` con la API oficial**, si algún día prefieres pagar por
-   uso a cambio de la máxima estabilidad.
-
-**Recomendación:** usa `manual` o un modelo local como forma habitual, y el
-proveedor `chatgpt` cuando quieras aprovechar la suscripción asumiendo que es
-una pieza que puede requerir mantenimiento.
-
----
-
 ## Configuración
 
 Copia `dashboard/.env.example` a `dashboard/.env` y ajusta lo que necesites.
@@ -216,22 +107,9 @@ Variables más útiles:
 | `DASHBOARD_POLL_INTERVAL` | `900` | Segundos entre sondeos (mínimo 60) |
 | `DASHBOARD_POLL_ON_START` | `1` | Sondear al arrancar |
 | `DASHBOARD_NITTER_INSTANCES` | 2 instancias | Respaldo, separadas por comas |
-| `DASHBOARD_ANALYSIS_PROVIDER` | `openai` | `openai`, `chatgpt` o `manual` |
-| `TELEGRAM_BOT_TOKEN` | vacío | Token del bot de @BotFather |
-| `TELEGRAM_CHAT_ID` | vacío | Tu chat con el bot |
-| `DASHBOARD_DEFAULT_RESOLUTION` | `4k` | `4k` o `native` |
+| `DASHBOARD_RETENTION_HOURS` | `48` | Horas que dura una publicación sin marcar |
 
-### Telegram en 3 pasos
-
-1. Habla con **@BotFather** en Telegram y crea un bot: te dará el token.
-2. Escríbele algo a tu bot (si no, no puede iniciar la conversación).
-3. Averigua tu `chat_id` (por ejemplo con **@userinfobot**) y ponlo en
-   `dashboard/.env`.
-
-El estado de la integración aparece en la pestaña **Estado y ajustes**; si
-falta algo, el dashboard te dice exactamente qué.
-
----
+Las variables de análisis, IA y Telegram que había antes ya no se leen.
 
 ## Datos locales
 
@@ -239,27 +117,28 @@ Todo queda en `dashboard/var/`, ignorado por Git:
 
 ```
 dashboard/var/
-  dashboard.sqlite3      estado (cuentas, publicaciones, tarjetas, entregas)
-  media/<tweet_id>/      medios descargados (se reutilizan al recomponer)
-  cards/<tweet_id>-v1.png tarjetas generadas
-  profiles/x/            perfil de Chrome para leer X
-  profiles/chatgpt/      perfil de Chrome para ChatGPT
+  dashboard.sqlite3   estado (cuentas y publicaciones)
+  profiles/x/         perfil de Chrome para leer X
+  media/              [heredado] medios que descargaba el compositor
+  cards/              [heredado] tarjetas del flujo anterior
 ```
 
-Los medios se descargan **una sola vez**: al editar y recomponer no se vuelve a
-salir a la red, así que el re-render es rápido.
+`media/` y `cards/` son restos de cuando el dashboard componía tarjetas. Se
+pueden borrar sin más: la bandeja usa las miniaturas del CDN de X, no archivos
+locales.
 
 ---
 
 ## Pruebas
 
 ```powershell
-python -m unittest discover -s tests -v      # suite completa (99 tests)
+python -m unittest discover -s tests -v      # suite completa (201 tests)
 python -m unittest tests.test_dashboard_core tests.test_dashboard_integration
 ```
 
-Los tests del dashboard no salen a la red: usan fixtures de RSS, un compositor
-real con imágenes generadas al vuelo y un servidor OpenAI simulado.
+Los tests del dashboard no salen a la red: usan fixtures de RSS, una base de
+datos temporal y un servidor propio en un puerto libre. Los tests del
+compositor (`test_compose_image.py`) son del repositorio y siguen pasando.
 
 ---
 
@@ -320,28 +199,38 @@ desfase detectado y de dónde sale el huso.
 
 ## Flujo de trabajo en la interfaz
 
-1. **Bandeja.** Lista **cronológica de una sola columna**, de más reciente a más
-   antigua, agrupada por día (`Hoy`, `Ayer`, `30 sep 2026`). Cada publicación
-   muestra cuenta, autor real (los reposts se atribuyen bien), texto,
-   miniaturas, **hora relativa** (`hace 2 h 15 min`) con la fecha exacta al lado,
-   enlace original y estado.
-2. **Procesar.** Envía el texto de la publicación al CLI de ChatGPT y **no
-   compone nada todavía**: espera a que devuelva **tres pares** de titular y
-   texto de abajo, ya saneados y con los colores de las palabras.
-3. **Elegir el texto.** Aparece un panel con las tres alternativas. La primera
-   queda seleccionada por defecto; se cambia con un toque. Si ninguna convence,
-   **«Generar otras 3 opciones»** pide otro trío, enviando al modelo los pares
-   anteriores para que no los repita. Solo al pulsar **«Confirmar y procesar»**
-   se descarga el material y se compone la tarjeta con el par elegido, que queda
-   guardado como análisis de la publicación.
-4. **Abrir editor.** Al terminar aparece al lado el botón que abre el **editor
-   independiente** en su propia pestaña.
-5. **Editor independiente** (`/editor.html?card=N`). Previsualización grande,
-   edición de texto y composición, entrega e historial. Lo único que se puede
-   **regenerar con IA** es el texto —titular de arriba, texto de abajo y
-   caption—: no toca las imágenes ni ningún otro ajuste, y recompone la tarjeta
-   sola. Admite una indicación opcional («más corto», «otro enfoque») y recibe
-   la versión anterior para no repetirla.
+Tres pestañas: **Bandeja**, **Cuentas** y **Ajustes**.
+
+**Bandeja.** Lista **cronológica de una columna**, de más reciente a más antigua,
+agrupada por día (`Hoy`, `Ayer`, `30 sep 2026`). Cada publicación muestra la
+cuenta, el autor real (los reposts se atribuyen bien), el texto, las miniaturas
+—con una etiqueta **vídeo** cuando lo son— y la **hora relativa** (`hace 2 h
+15 min`) con la fecha exacta al lado.
+
+Tres botones por publicación, y ninguno más:
+
+| Botón | Qué hace |
+|---|---|
+| **Ver original** | Abre la publicación en X, en otra pestaña |
+| **Copiar enlace** | Copia su URL al portapapeles |
+| **Marcar listo** | La aparta: **no se borra** en la limpieza. Se puede desmarcar |
+
+El filtro **Ver** cambia entre *Pendientes*, *Marcadas como listas* y *Todas*.
+Al marcar una publicación como lista desaparece de *Pendientes* y pasa a
+*Marcadas como listas*, que es donde se puede desmarcar.
+
+**Cuentas.** Añadir, pausar y quitar cuentas de X.
+
+**Ajustes.** Estado de la limpieza —con un botón para forzarla—, las fuentes de
+publicaciones, los ajustes efectivos y los últimos movimientos.
+
+### Copiar enlace, que tiene truco
+
+`navigator.clipboard` **solo funciona en contexto seguro** (HTTPS o localhost).
+Al entrar desde el móvil por `http://<ip-de-tailscale>:8765` no existe, así que
+el botón usa un respaldo con un campo temporal; y si el navegador tampoco lo
+permite, enseña el enlace para copiarlo a mano. Sin eso, en el móvil no habría
+hecho nada.
 
 ---
 
@@ -357,9 +246,14 @@ Por eso hay dos capas separadas:
 | Capa | Qué guarda | Se borra |
 |---|---|---|
 | `seen_tweets` | Identificador, fecha, autor y huella. Unos 60 bytes por fila | **Nunca** |
-| `tweets` + archivos | Texto, medios, tarjeta y estado, lo que se ve | A las 48 h |
+| `tweets` + archivos | Texto, medios y estado, lo que se ve | A las 48 h, **salvo lo marcado como listo** |
 
 Resultado: la bandeja se mantiene corta y ligera, y nada vuelve a aparecer.
+
+**La excepción es «listo».** La limpieza borra por edad sin mirar nada más, así
+que una publicación marcada como lista **no se toca nunca**, haga la edad que
+haga. Es la razón de existir de ese botón: sin él, la retención se llevaría
+justo lo que se quería conservar. Al desmarcarla vuelve al montón.
 
 **Dos barreras contra las repeticiones:**
 
@@ -375,7 +269,7 @@ publicaciones cortas iguales («GG», «🚨», «NUEVO») no se confunden entre
 Y como incluye el autor, dos cuentas distintas contando lo mismo no se pisan.
 
 La limpieza corre sola después de cada sondeo (como mucho una vez por hora) y
-también a mano con **Limpiar ahora**. El estado se ve en **Estado y ajustes**.
+también a mano con **Limpiar ahora**. El estado se ve en **Ajustes**.
 
 ---
 
@@ -386,11 +280,13 @@ La interfaz está adaptada para usarla desde el teléfono:
 - Una sola columna, con los filtros a ancho completo.
 - Campos de **16 px**, que es lo que evita que iOS haga zoom al enfocarlos y
   descuadre la página.
-- Objetivos táctiles de 44 px y botones de cada publicación a lo ancho.
-- Cabecera y pestañas no fijas y deslizables, para no comerse la pantalla.
-- Miniaturas en tira deslizable lateral.
+- Objetivos táctiles de 44 px, y **los tres botones de cada publicación a lo
+  ancho**: se pulsan con el pulgar sin apuntar.
+- Cabecera no fija y pestañas deslizables, para no comerse la pantalla.
 - Márgenes de zona segura (`env(safe-area-inset-*)`) para los móviles con
   notch, y toasts a lo ancho.
+- La **primera publicación se ve sin bajar**: los filtros y la ayuda plegada
+  ocupan lo justo.
 
 Se entra con `python -m dashboard --lan` y abriendo desde el móvil la dirección
 con `?token=` que imprime al arrancar.
@@ -444,9 +340,13 @@ Get-Content dashboard\var\dashboard.log -Tail 30
 
 ## Límites conocidos
 
-- **Publicaciones sin imágenes.** El compositor canónico necesita al menos una
-  imagen, así que un tweet de solo texto no se puede convertir en tarjeta. El
-  dashboard las marca en la bandeja en lugar de fallar en silencio.
+- **Los vídeos se ven como miniatura**, no se reproducen dentro del dashboard.
+  X publica una imagen de portada y un enlace; el vídeo se ve abriendo la
+  publicación. Incrustar el reproductor obligaría a depender del marcado de X.
+- **Copiar enlace depende del navegador.** En contexto seguro (HTTPS o
+  localhost) usa el portapapeles moderno; por HTTP sin cifrar —el caso del móvil
+  por Tailscale— recurre a un respaldo, y si el navegador lo bloquea enseña el
+  enlace para copiarlo a mano.
 - **Fecha de publicación.** X ya no expone la fecha exacta en su web (solo
   «hace 9 h»), así que se resuelve consultando la misma API que ya usaba el
   repositorio al enriquecer cada publicación nueva.
@@ -454,5 +354,7 @@ Get-Content dashboard\var\dashboard.log -Tail 30
   guardan `origen` y `autor` por separado para no atribuirlas mal.
 - **Nitter** son instancias de terceros: caen a menudo. De ahí la rotación
   automática y el respaldo por navegador.
-- **El proveedor `chatgpt`** es experimental y puede requerir ajustes cuando
-  OpenAI cambie su web.
+- **Estados heredados.** Las publicaciones que se convirtieron en tarjeta con el
+  flujo anterior siguen en la base con su estado (`tarjeta_lista`, `enviado`).
+  No estorban —cuentan como atendidas— y se pueden marcar como listas o
+  descartar como cualquier otra.
