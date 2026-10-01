@@ -22,30 +22,50 @@ from . import config
 from .clock import CLOCK
 
 #: Estados del ciclo de vida de una publicación.
+#:
+#: `listo` es el que importa: marca lo que el usuario ya revisó y quiere
+#: conservar, y es la **única excepción** a la limpieza por retención.
 STATUS_NEW = "nuevo"
+STATUS_READY = "listo"
+STATUS_DISCARDED = "descartado"
+STATUS_FAILED = "fallido"
+STATUS_DUPLICATE = "duplicado"
+
+#: Estados heredados de cuando el dashboard componía tarjetas. Se conservan para
+#: poder leer bases de datos antiguas y contarlas, pero ya no se asignan.
 STATUS_SELECTED = "seleccionado"
 STATUS_ANALYZED = "analizado"
 STATUS_PROCESSING = "procesando"
 STATUS_CARD_READY = "tarjeta_lista"
 STATUS_SENT = "enviado"
-STATUS_DISCARDED = "descartado"
-STATUS_FAILED = "fallido"
-STATUS_DUPLICATE = "duplicado"
 
 ALL_STATUSES = (
     STATUS_NEW,
+    STATUS_READY,
+    STATUS_DISCARDED,
+    STATUS_FAILED,
+    STATUS_DUPLICATE,
     STATUS_SELECTED,
     STATUS_ANALYZED,
     STATUS_PROCESSING,
     STATUS_CARD_READY,
     STATUS_SENT,
-    STATUS_DISCARDED,
-    STATUS_FAILED,
-    STATUS_DUPLICATE,
 )
 
-#: Estados que cuentan como «ya procesada» de cara a la interfaz.
-PROCESSED_STATUSES = (STATUS_CARD_READY, STATUS_SENT)
+#: Estados que dejan de estorbar en la vista de pendientes.
+#:
+#: Los heredados van incluidos a propósito: lo que ya se convirtió en tarjeta
+#: con el flujo anterior está atendido, y volver a enseñarlo como «nuevo» sería
+#: ruido. Lo destapó un test al recortar el dashboard.
+PROCESSED_STATUSES = (
+    STATUS_READY,
+    STATUS_DISCARDED,
+    STATUS_CARD_READY,
+    STATUS_SENT,
+)
+
+#: Lo que la limpieza **nunca** borra, haga la edad que haga.
+PROTECTED_STATUSES = (STATUS_READY,)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -472,15 +492,21 @@ class Store:
         Solo se borra lo **visible**: el registro de `seen_tweets` se conserva,
         que es lo que impide que esas publicaciones vuelvan a aparecer como
         nuevas en la siguiente búsqueda.
+
+        Lo marcado como **listo** no se toca nunca: esa marca existe justo para
+        eso, para decir «esta la vi y la quiero conservar».
         """
         cutoff = (CLOCK.now() - timedelta(hours=max(1, int(hours)))).replace(
             microsecond=0
         ).isoformat()
 
+        protegidos = ",".join("?" * len(PROTECTED_STATUSES))
         with self._cursor() as connection:
             rows = connection.execute(
-                "SELECT tweet_id FROM tweets WHERE COALESCE(posted_at, fetched_at) < ?",
-                (cutoff,),
+                f"SELECT tweet_id FROM tweets "
+                f"WHERE COALESCE(posted_at, fetched_at) < ? "
+                f"AND status NOT IN ({protegidos})",
+                (cutoff, *PROTECTED_STATUSES),
             ).fetchall()
         tweet_ids = [row["tweet_id"] for row in rows]
         if not tweet_ids:
@@ -622,127 +648,6 @@ class Store:
             counts[row["status"]] = row["total"]
         return counts
 
-    # --- tarjetas ------------------------------------------------------
-    def create_card(
-        self,
-        tweet_id: str,
-        params: dict,
-        *,
-        output_path: str | None = None,
-        meta: dict | None = None,
-    ) -> dict:
-        with self._cursor() as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(version), 0) AS last FROM cards WHERE tweet_id = ?",
-                (str(tweet_id),),
-            ).fetchone()
-            version = int(row["last"]) + 1
-            cursor = connection.execute(
-                "INSERT INTO cards (tweet_id, version, params_json, output_path, meta_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    str(tweet_id),
-                    version,
-                    json.dumps(params, ensure_ascii=False),
-                    output_path,
-                    json.dumps(meta, ensure_ascii=False) if meta else None,
-                    utcnow(),
-                ),
-            )
-            card_id = cursor.lastrowid
-        return self.get_card(int(card_id))  # type: ignore[return-value]
-
-    def update_card(
-        self,
-        card_id: int,
-        *,
-        output_path: str | None = None,
-        meta: dict | None = None,
-        params: dict | None = None,
-    ) -> None:
-        sets: list[str] = []
-        params_list: list[Any] = []
-        if output_path is not None:
-            sets.append("output_path = ?")
-            params_list.append(output_path)
-        if meta is not None:
-            sets.append("meta_json = ?")
-            params_list.append(json.dumps(meta, ensure_ascii=False))
-        if params is not None:
-            sets.append("params_json = ?")
-            params_list.append(json.dumps(params, ensure_ascii=False))
-        if not sets:
-            return
-        params_list.append(int(card_id))
-        with self._cursor() as connection:
-            connection.execute(f"UPDATE cards SET {', '.join(sets)} WHERE id = ?", params_list)
-
-    def get_card(self, card_id: int) -> dict | None:
-        with self._cursor() as connection:
-            row = connection.execute("SELECT * FROM cards WHERE id = ?", (int(card_id),)).fetchone()
-        return _decode_card(dict(row)) if row else None
-
-    def latest_card(self, tweet_id: str) -> dict | None:
-        with self._cursor() as connection:
-            row = connection.execute(
-                "SELECT * FROM cards WHERE tweet_id = ? ORDER BY version DESC LIMIT 1",
-                (str(tweet_id),),
-            ).fetchone()
-        return _decode_card(dict(row)) if row else None
-
-    def list_cards(self, tweet_id: str | None = None) -> list[dict]:
-        with self._cursor() as connection:
-            if tweet_id:
-                rows = connection.execute(
-                    "SELECT * FROM cards WHERE tweet_id = ? ORDER BY version DESC",
-                    (str(tweet_id),),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM cards ORDER BY id DESC LIMIT 200"
-                ).fetchall()
-        return [_decode_card(dict(row)) for row in rows]
-
-    def latest_card_ids(self) -> dict[str, int]:
-        """Mapa `tweet_id -> id` de la tarjeta más reciente de cada publicación."""
-        with self._cursor() as connection:
-            rows = connection.execute(
-                "SELECT tweet_id, MAX(id) AS card_id FROM cards GROUP BY tweet_id"
-            ).fetchall()
-        return {row["tweet_id"]: int(row["card_id"]) for row in rows}
-
-    # --- entregas ------------------------------------------------------
-    def record_delivery(
-        self, card_id: int, target: str, status: str, response: str | None = None
-    ) -> dict:
-        with self._cursor() as connection:
-            cursor = connection.execute(
-                "INSERT INTO deliveries (card_id, target, status, response, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (int(card_id), target, status, response, utcnow()),
-            )
-            delivery_id = cursor.lastrowid
-        return {
-            "id": delivery_id,
-            "card_id": int(card_id),
-            "target": target,
-            "status": status,
-            "response": response,
-        }
-
-    def list_deliveries(self, card_id: int | None = None, limit: int = 100) -> list[dict]:
-        with self._cursor() as connection:
-            if card_id:
-                rows = connection.execute(
-                    "SELECT * FROM deliveries WHERE card_id = ? ORDER BY id DESC LIMIT ?",
-                    (int(card_id), int(limit)),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM deliveries ORDER BY id DESC LIMIT ?", (int(limit),)
-                ).fetchall()
-        return [dict(row) for row in rows]
-
 
 #: Texto mínimo (sin medios) para fiarse de la huella de contenido. Por debajo
 #: de esto, dos publicaciones con el mismo texto corto («GG», «🚨», «NUEVO»)
@@ -832,15 +737,3 @@ def _decode_tweet(row: dict) -> dict:
     return row
 
 
-def _decode_card(row: dict) -> dict:
-    for key in ("params_json", "meta_json"):
-        raw = row.get(key)
-        target = key.replace("_json", "")
-        if raw:
-            try:
-                row[target] = json.loads(raw)
-            except json.JSONDecodeError:
-                row[target] = None
-        else:
-            row[target] = None
-    return row

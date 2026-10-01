@@ -3,94 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EditImg Dashboard</title>
+<title>EditImg · Publicaciones</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
 
 <header class="top">
   <div class="brand">
-    <h1>EditImg Dashboard</h1>
-    <span>tarjetas de Fortnite · sobre el flujo existente</span>
+    <h1>Publicaciones</h1>
+    <span>Fortnite · solo mirar y marcar</span>
   </div>
   <div class="spacer"></div>
   <div id="provider-pills" class="row"></div>
   <button id="btn-poll" class="primary">Buscar ahora</button>
-  <button id="btn-refresh" class="ghost small">Refrescar</button>
 </header>
 
-<nav class="tabs" role="tablist" aria-label="Secciones del dashboard">
+<nav class="tabs" role="tablist" aria-label="Secciones">
   <button data-tab="inbox" class="active" aria-current="page">Bandeja</button>
-  <button data-tab="cards">Procesadas</button>
-  <button data-tab="editor">Editor</button>
   <button data-tab="accounts">Cuentas</button>
-  <button data-tab="settings">Estado y ajustes</button>
-  <button data-tab="log">Bitácora</button>
+  <button data-tab="settings">Ajustes</button>
 </nav>
 
 <main>
 
-  <!-- ============ PROPUESTAS ============
-       Va antes que la bandeja a propósito. Al final de una lista larga el
-       panel quedaba pegado al fondo de la página y los botones de acción
-       («Generar otras 3 opciones», «Confirmar y procesar») caían por debajo
-       del pliegue: había que bajar para poder decidir. -->
-  <section id="proposal-panel" class="panel proposal-panel" hidden aria-live="polite">
-    <div class="row">
-      <div>
-        <h2>Elige el texto de la tarjeta</h2>
-        <p id="proposal-tweet" class="small muted" style="margin:0"></p>
-      </div>
-      <span class="spacer"></span>
-      <button id="btn-cancel-proposals" class="ghost small">Cerrar</button>
-    </div>
-    <p class="small muted">
-      La primera opción queda seleccionada por defecto. Pulsa otra para cambiarla;
-      la imagen solo se compondrá cuando confirmes.
-    </p>
-    <div id="proposal-options" class="proposal-options" role="radiogroup" aria-label="Opciones de texto"></div>
-    <div class="row proposal-actions">
-      <button id="btn-more-proposals" class="ghost">Generar otras 3 opciones</button>
-      <span class="spacer"></span>
-      <button id="btn-confirm-proposal" class="primary">Confirmar y procesar</button>
-    </div>
-    <div id="proposal-info" class="small muted" style="margin-top:10px"></div>
-  </section>
-
   <!-- ============ BANDEJA ============ -->
   <section id="tab-inbox">
     <div class="panel">
-      <h2>Bandeja de publicaciones</h2>
+      <h2>Publicaciones</h2>
       <div class="row">
-        <!-- Etiquetas cortas a propósito: con «Solo pendientes (oculta
-             procesadas)» el selector pedía toda la fila él solo y empujaba los
-             demás hacia abajo. -->
-        <div style="min-width:120px">
-          <label for="filter-pending">Ver</label>
-          <select id="filter-pending">
-            <option value="1" selected>Solo pendientes</option>
-            <option value="0">Todas</option>
+        <div style="min-width:130px">
+          <label for="filter-view">Ver</label>
+          <select id="filter-view">
+            <option value="pendientes" selected>Pendientes</option>
+            <option value="listas">Marcadas como listas</option>
+            <option value="todas">Todas</option>
           </select>
         </div>
-        <div style="min-width:120px">
-          <label for="filter-status">Estado</label>
-          <select id="filter-status">
-            <option value="todos">Todos</option>
-            <option value="nuevo">Nuevo</option>
-            <option value="seleccionado">Seleccionado</option>
-            <option value="analizado">Analizado</option>
-            <option value="tarjeta_lista">Tarjeta lista</option>
-            <option value="enviado">Enviado</option>
-            <option value="descartado">Descartado</option>
-            <option value="fallido">Fallido</option>
-            <option value="duplicado">Duplicado</option>
-          </select>
-        </div>
-        <div style="min-width:190px">
+        <div style="min-width:130px">
           <label for="filter-account">Cuenta</label>
           <select id="filter-account"><option value="">Todas</option></select>
         </div>
-        <div style="min-width:190px">
+        <div style="min-width:100px">
           <label for="filter-limit">Cantidad</label>
           <select id="filter-limit">
             <option value="50">50</option>
@@ -101,170 +54,21 @@
         <div class="spacer"></div>
         <div id="counts" class="row small muted"></div>
       </div>
+
       <details class="help">
-        <summary>Cómo funciona la bandeja</summary>
+        <summary>Qué hace cada botón</summary>
         <p class="small muted" style="margin:8px 0 0">
-          El sistema <strong>no</strong> convierte nada automáticamente: primero trae las
-          publicaciones y tú eliges cuáles se convierten en tarjeta. La lista va de
-          <strong>más reciente a más antigua</strong>, agrupada por día. Lo que ya
-          procesaste desaparece de la vista, y cada publicación se recuerda para
-          <strong>no volver a aparecer</strong> aunque se limpie.
+          <strong>Ver original</strong> abre la publicación en X.
+          <strong>Copiar enlace</strong> copia su URL al portapapeles.
+          <strong>Marcar listo</strong> la aparta: <strong>no se borra</strong> en la
+          limpieza automática, que se lleva lo demás pasado el tiempo de retención.
+          Una publicación marcada se puede desmarcar cuando quieras.
         </p>
       </details>
+
       <div id="poller-state" class="row small" style="margin-top:8px"></div>
     </div>
     <div id="inbox" class="feed"></div>
-  </section>
-
-  <!-- ============ PROCESADAS ============ -->
-  <section id="tab-cards" hidden>
-    <div class="panel">
-      <h2>Tarjetas procesadas</h2>
-      <details class="help">
-        <summary>Qué puedes hacer con una tarjeta</summary>
-        <p class="small muted" style="margin:8px 0 0">
-          Aquí quedan todas las tarjetas que ya creaste, aunque hayan salido de la
-          bandeja de pendientes. Desde aquí puedes <strong>abrir el editor</strong>,
-          <strong>volver a generar el texto y los colores</strong> con tu
-          suscripción, <strong>enviarlas a Telegram</strong> o descargarlas. Al
-          pulsar «Procesar» primero verás tres pares de textos generados por el
-          CLI de ChatGPT y elegirás uno antes de componer.
-        </p>
-      </details>
-      <div class="row">
-        <button id="btn-refresh-cards" class="ghost small">Actualizar</button>
-        <div class="spacer"></div>
-        <div id="cards-count" class="small muted"></div>
-      </div>
-    </div>
-    <div id="cards" class="grid cols-3"></div>
-  </section>
-
-  <!-- ============ EDITOR ============ -->
-  <section id="tab-editor" hidden>
-    <div id="editor-empty" class="empty">
-      Selecciona una publicación en la bandeja para analizarla y crear su tarjeta.
-    </div>
-
-    <div id="editor-body" class="grid cols-2" hidden>
-      <div>
-        <div class="panel">
-          <h2>Publicación</h2>
-          <div id="editor-tweet"></div>
-        </div>
-
-        <div class="panel">
-          <h2>Texto y composición</h2>
-          <div class="field">
-            <label for="f-top">Titular (--top) · máx. 2 palabras con {PALABRA|COLOR}</label>
-            <textarea id="f-top"></textarea>
-          </div>
-          <div class="field">
-            <label for="f-bottom">Contexto (--bottom)</label>
-            <textarea id="f-bottom"></textarea>
-          </div>
-          <div class="row">
-            <div style="flex:1;min-width:120px">
-              <label for="f-format">Formato</label>
-              <select id="f-format">
-                <option value="auto">auto</option>
-                <option value="9:16">9:16 vertical</option>
-                <option value="1:1">1:1 cuadrado</option>
-                <option value="16:9">16:9 horizontal</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:110px">
-              <label for="f-fit">Ajuste</label>
-              <select id="f-fit">
-                <option value="auto">auto</option>
-                <option value="cover">cover</option>
-                <option value="contain">contain</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:110px">
-              <label for="f-resolution">Resolución</label>
-              <select id="f-resolution">
-                <option value="4k">4k</option>
-                <option value="native">native</option>
-              </select>
-            </div>
-          </div>
-          <div class="row" style="margin-top:10px">
-            <div style="flex:2;min-width:150px">
-              <label for="f-style">Estilo de collage</label>
-              <select id="f-style"></select>
-            </div>
-            <div style="flex:1;min-width:100px">
-              <label for="f-backend">Backend</label>
-              <select id="f-backend">
-                <option value="auto">auto</option>
-                <option value="cpu">cpu</option>
-                <option value="gpu">gpu</option>
-              </select>
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px">
-            <button id="btn-generate" class="primary">Generar tarjeta</button>
-            <button id="btn-render" class="accent" disabled>Volver a componer</button>
-            <span class="spacer"></span>
-            <span id="render-info" class="small muted"></span>
-          </div>
-          <p class="small muted" style="margin-bottom:0">
-            Se usa el compositor canónico <code>bin/compose_image.py</code> con las
-            mismas opciones del flujo de Telegram.
-          </p>
-        </div>
-
-        <div class="panel">
-          <h2>Entrega</h2>
-          <div class="field">
-            <label for="f-caption">Caption (los hashtags van aquí, nunca dentro de la imagen)</label>
-            <textarea id="f-caption"></textarea>
-          </div>
-          <div class="row">
-            <div style="flex:1;min-width:150px">
-              <label for="f-delivery">Destino</label>
-              <select id="f-delivery">
-                <option value="auto">auto (Telegram si está configurado)</option>
-                <option value="telegram">Telegram (sendDocument)</option>
-                <option value="local">solo guardar el archivo</option>
-              </select>
-            </div>
-            <div style="align-self:flex-end">
-              <button id="btn-send" class="accent" disabled>Enviar a Telegram</button>
-            </div>
-          </div>
-          <div id="send-result" class="small" style="margin-top:10px"></div>
-        </div>
-      </div>
-
-      <div>
-        <div class="panel">
-          <h2>Previsualización</h2>
-          <div id="preview" class="preview">
-            <span class="muted">Todavía no hay tarjeta generada.</span>
-          </div>
-          <div id="preview-meta" class="small muted" style="margin-top:10px"></div>
-          <div class="row" style="margin-top:10px">
-            <a id="download-link" class="small" href="#" download hidden>Descargar PNG</a>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Análisis</h2>
-          <div class="row">
-            <div style="flex:1;min-width:150px">
-              <label for="f-analysis">Proveedor de análisis</label>
-              <select id="f-analysis"></select>
-            </div>
-            <div style="align-self:flex-end">
-              <button id="btn-analyze" class="primary">Analizar con IA</button>
-            </div>
-          </div>
-          <div id="analysis-info" class="small" style="margin-top:10px"></div>
-        </div>
-      </div>
-    </div>
   </section>
 
   <!-- ============ CUENTAS ============ -->
@@ -278,11 +82,11 @@
         <button class="primary" type="submit">Añadir</button>
       </form>
       <p class="small muted" style="margin-bottom:0">
-        Se guardan en la base de datos local y se revisan automáticamente según el intervalo.
+        Se revisan solas según el intervalo configurado.
       </p>
     </div>
     <div class="panel">
-      <h2>Cuentas monitoreadas</h2>
+      <h2>Cuentas seguidas</h2>
       <div id="accounts"></div>
     </div>
   </section>
@@ -290,30 +94,11 @@
   <!-- ============ AJUSTES ============ -->
   <section id="tab-settings" hidden>
     <div class="panel">
-      <h2>Análisis con IA (tu suscripción)</h2>
-      <p class="small muted" style="margin-top:0">
-        El proveedor preferido es el <strong>CLI de Codex</strong> que ya está
-        instalado y con sesión iniciada en este equipo: consume tu
-        <strong>suscripción de ChatGPT</strong>, no una clave de API de pago, y
-        devuelve JSON validado. Genera el titular de arriba, el texto de abajo y
-        <strong>los colores de las palabras</strong> y tres alternativas de par superior/inferior para elegir antes de componer.
-      </p>
-      <div id="chatgpt-state" class="row" style="margin-bottom:12px"></div>
-      <div class="row">
-        <button id="btn-analysis-test" class="accent">Probar análisis con una publicación</button>
-        <button id="btn-chatgpt-login" class="ghost">Abrir ventana de ChatGPT (alternativa)</button>
-      </div>
-      <div id="analysis-test-result" class="small" style="margin-top:12px"></div>
-    </div>
-
-    <div class="panel">
       <h2>Limpieza automática</h2>
       <p class="small muted" style="margin-top:0">
-        Las publicaciones dejan de mostrarse al pasar el tiempo de retención, junto
-        con sus imágenes y tarjetas. <strong>No se olvidan</strong>: se guarda un
-        registro permanente de lo ya visto, así que no vuelven a aparecer como
-        nuevas en la siguiente búsqueda. Además se detecta la misma noticia
-        republicada con otro identificador.
+        Pasado el tiempo de retención se borran las publicaciones y sus archivos.
+        <strong>Lo marcado como listo no se toca nunca.</strong> Aunque se borre
+        algo, se recuerda para que no vuelva a aparecer como nuevo.
       </p>
       <div id="maintenance-state" class="row" style="margin-bottom:12px"></div>
       <div class="row">
@@ -324,7 +109,7 @@
 
     <div class="grid cols-2">
       <div class="panel">
-        <h2>Proveedores</h2>
+        <h2>Fuentes de publicaciones</h2>
         <div id="providers"></div>
       </div>
       <div class="panel">
@@ -332,21 +117,9 @@
         <div id="settings"></div>
       </div>
     </div>
-    <div class="panel">
-      <h2>Cómo se reutiliza el repositorio</h2>
-      <ul class="small muted">
-        <li>Composición: <code>bin/compose_image.py</code> (sin modificarlo).</li>
-        <li>Descarga de medios: <code>bin/fetch_media.py</code> (orden, límite de 25 MB y validación originales).</li>
-        <li>Preset automático y validación de salida: funciones de <code>bin/edit_link.py</code>.</li>
-        <li>Entrega: PNG como documento (<code>sendDocument</code>), como indica el repositorio.</li>
-      </ul>
-    </div>
-  </section>
 
-  <!-- ============ BITÁCORA ============ -->
-  <section id="tab-log" hidden>
     <div class="panel">
-      <h2>Bitácora</h2>
+      <h2>Últimos movimientos</h2>
       <div id="events" class="log"></div>
     </div>
   </section>

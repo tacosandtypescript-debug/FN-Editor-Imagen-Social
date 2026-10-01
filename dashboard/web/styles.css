@@ -1,4 +1,4 @@
-/* EditImg Dashboard — paleta de marca: morado, naranja, magenta, dorado
+/* EditImg · visor de publicaciones — paleta de marca: morado, naranja, magenta, dorado
  *
  * Capas de tokens, para que ningún componente lleve hex sueltos:
  *   marca      -> --purple, --orange, --magenta, --gold
@@ -6,6 +6,9 @@
  *   texto      -> --text, --muted
  *   estado     -> --ok*, --warn*, --error*, --off*
  *   foco       -> --focus
+ *
+ * Se quitó todo lo del editor, el compositor y las propuestas: este dashboard
+ * solo mira publicaciones.
  */
 :root {
   /* Superficies */
@@ -45,18 +48,18 @@
   --focus: #ffd166;
   --img-bg: #000;
   --on-accent: #241300;
-  --preview-bg: #08060f;
-  --preview-alt: #141020;
 
-  /* Estados de una publicación, uno por variante del ciclo de vida. */
-  --st-nuevo-bg: #24406b;        --st-nuevo-fg: #a9cdff;
+  /* Estados de una publicación. `listo` es el que salva de la limpieza. */
+  --st-nuevo-bg: #24406b;      --st-nuevo-fg: #a9cdff;
+  --st-listo-bg: #14503a;      --st-listo-fg: #8ff0c0;
+  --st-descartado-bg: #3a3a44; --st-descartado-fg: #b9b9c6;
+  --st-fallido-bg: #5c1f2e;    --st-fallido-fg: #ffb3c2;
+  --st-duplicado-bg: #33303d;  --st-duplicado-fg: #9d97b3;
+  /* Heredados de cuando se componían tarjetas: siguen en bases antiguas. */
   --st-seleccionado-bg: #4a3a10; --st-seleccionado-fg: #ffd166;
   --st-analizado-bg: #3d2a5e;    --st-analizado-fg: #d9bcff;
   --st-lista-bg: #14503a;        --st-lista-fg: #8ff0c0;
   --st-enviado-bg: #1c5232;      --st-enviado-fg: #a6f7c8;
-  --st-descartado-bg: #3a3a44;   --st-descartado-fg: #b9b9c6;
-  --st-fallido-bg: #5c1f2e;      --st-fallido-fg: #ffb3c2;
-  --st-duplicado-bg: #33303d;    --st-duplicado-fg: #9d97b3;
   --st-procesando-bg: #2d3a5c;   --st-procesando-fg: #bcd4ff;
 
   --radius: 12px;
@@ -74,7 +77,7 @@ html { -webkit-text-size-adjust: 100%; }
   border-radius: 6px;
 }
 
-/* Quien pide menos movimiento, lo recibe: se apagan animaciones y transiciones. */
+/* Quien pide menos movimiento, lo recibe. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .001ms !important;
@@ -92,17 +95,18 @@ body {
   font-size: 14px;
   line-height: 1.5;
   min-height: 100vh;
-  /* Tirar hacia abajo para recargar es fácil de provocar sin querer y hace
-     perder el estado de la página; aquí se desactiva. */
+  /* Tirar hacia abajo para recargar es fácil de provocar sin querer. */
   overscroll-behavior-y: contain;
 }
 
-/* Sin `manipulation`, el móvil espera hasta 300 ms a ver si es doble toque:
-   los botones se sienten lentos. */
+/* Sin `manipulation`, el móvil espera hasta 300 ms a ver si es doble toque. */
 button, a, select, input, label, [role="button"] { touch-action: manipulation; }
 
 a { color: var(--gold); }
 
+/* ------------------------------------------------------------------ */
+/* Cabecera                                                            */
+/* ------------------------------------------------------------------ */
 header.top {
   display: flex;
   align-items: center;
@@ -147,8 +151,11 @@ nav.tabs { display: flex; gap: 6px; padding: 12px 22px 0; flex-wrap: wrap; }
 nav.tabs button { border-radius: 999px; }
 nav.tabs button.active { background: var(--purple); border-color: transparent; font-weight: 600; }
 
-main { padding: 16px 22px 60px; max-width: 1500px; margin: 0 auto; }
+main { padding: 16px 22px 60px; max-width: 1100px; margin: 0 auto; }
 
+/* ------------------------------------------------------------------ */
+/* Bloques                                                             */
+/* ------------------------------------------------------------------ */
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -161,8 +168,7 @@ main { padding: 16px 22px 60px; max-width: 1500px; margin: 0 auto; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .grid { display: grid; gap: 14px; }
 .grid.cols-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-@media (max-width: 1100px) { .grid.cols-2 { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .grid.cols-2 { grid-template-columns: 1fr; } }
 
 input, select, textarea {
   font: inherit;
@@ -173,9 +179,7 @@ input, select, textarea {
   padding: 7px 10px;
   width: 100%;
 }
-textarea { resize: vertical; min-height: 60px; }
 label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-.field { margin-bottom: 10px; }
 
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
@@ -190,25 +194,19 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 
 .badge { padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
 .badge.nuevo { background: var(--st-nuevo-bg); color: var(--st-nuevo-fg); }
+.badge.listo { background: var(--st-listo-bg); color: var(--st-listo-fg); }
+.badge.descartado { background: var(--st-descartado-bg); color: var(--st-descartado-fg); }
+.badge.fallido { background: var(--st-fallido-bg); color: var(--st-fallido-fg); }
+.badge.duplicado { background: var(--st-duplicado-bg); color: var(--st-duplicado-fg); }
 .badge.seleccionado { background: var(--st-seleccionado-bg); color: var(--st-seleccionado-fg); }
 .badge.analizado { background: var(--st-analizado-bg); color: var(--st-analizado-fg); }
 .badge.tarjeta_lista { background: var(--st-lista-bg); color: var(--st-lista-fg); }
 .badge.enviado { background: var(--st-enviado-bg); color: var(--st-enviado-fg); }
-.badge.descartado { background: var(--st-descartado-bg); color: var(--st-descartado-fg); }
-.badge.fallido { background: var(--st-fallido-bg); color: var(--st-fallido-fg); }
-.badge.duplicado { background: var(--st-duplicado-bg); color: var(--st-duplicado-fg); }
 .badge.procesando { background: var(--st-procesando-bg); color: var(--st-procesando-fg); }
 
-/* Marca de «ya procesada»: se ve de un vistazo sin tener que leer el estado. */
-.tweet.processed { border-left: 3px solid var(--ok); }
-.tweet.processed .text { opacity: .78; }
-.tweet.is-duplicate { opacity: .62; border-left: 3px solid var(--line-soft); }
-.done-flag {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px; font-weight: 700; letter-spacing: .3px;
-  color: var(--ok); text-transform: uppercase;
-}
-
+/* ------------------------------------------------------------------ */
+/* Publicación                                                         */
+/* ------------------------------------------------------------------ */
 .tweet {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -218,89 +216,64 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
   flex-direction: column;
   gap: 9px;
 }
-.tweet.selected { outline: 2px solid var(--purple); }
+/* Lo marcado como listo se distingue de un vistazo: es lo que no se borra. */
+.tweet.ready { border-left: 3px solid var(--ok); }
 .tweet .meta { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .tweet .account { color: var(--gold); font-weight: 600; }
 .tweet .text { white-space: pre-wrap; word-break: break-word; }
-/* Hora relativa en primer plano y fecha exacta al lado, en segundo plano. */
 .tweet .when { font-size: 12.5px; color: var(--text); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
 .tweet .when strong { color: var(--gold); font-weight: 600; }
+
+.done-flag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: .3px;
+  color: var(--ok); text-transform: uppercase;
+}
+
 .tweet .thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tweet .thumbs .shot { position: relative; display: block; line-height: 0; }
 .tweet .thumbs img {
-  width: 78px; height: 78px; object-fit: cover;
+  width: 108px; height: 108px; object-fit: cover;
   border-radius: 8px; border: 1px solid var(--line); background: var(--img-bg);
 }
+/* Los vídeos de X llegan como miniatura; se señalan para no confundirlos. */
+.video-flag {
+  position: absolute; left: 5px; bottom: 5px;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border-radius: 6px;
+  background: rgba(0, 0, 0, .72); color: #fff;
+  font-size: 10.5px; font-weight: 600; line-height: 1.4;
+}
+
 .tweet .actions { display: flex; gap: 7px; flex-wrap: wrap; }
-
-/* ------------------------------------------------------------------
-   Tarjetas procesadas
-
-   Una tarjeta 9:16 en una columna de 430 px mide 765 px de alto, así que
-   dejaba los botones («Abrir editor», «Regenerar texto», «Enviar») muy por
-   debajo del borde de la pantalla, y no solo en el móvil. Aquí los botones
-   van antes que la imagen y la imagen se limita: se sigue viendo la tarjeta,
-   pero se puede actuar sin bajar.
-   ------------------------------------------------------------------ */
-.tweet.processed .actions { order: 2; gap: 8px; }
-.tweet.processed .card-shot { order: 3; }
-.tweet.processed .format-row { order: 1; }
-
-/* Selector de formato: permite corregir una tarjeta ya compuesta. */
-.format-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 4px;
+.tweet .actions > * { flex: 1 1 auto; text-align: center; }
+/* «Ver original» es un enlace, así que no hereda el estilo de `button`; se le
+   da el mismo aspecto que a un botón primario. */
+.tweet .actions a.small {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 9px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text);
+  font: inherit; text-decoration: none;
+  transition: filter var(--transition), transform var(--transition);
 }
-.format-row label { flex: 0 0 auto; }
-.format-row select { flex: 1 1 130px; min-width: 0; }
-.format-row button { flex: 0 0 auto; }
-
-/* Selección previa: las tres alternativas se pueden cambiar con un toque. */
-.proposal-panel { border-color: var(--purple); background: linear-gradient(180deg, rgba(139,61,255,.14), var(--panel)); }
-.proposal-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.proposal-option {
-  display: flex; flex-direction: column; gap: 8px; text-align: left;
-  min-height: 132px; padding: 13px; border: 1px solid var(--line);
-  border-radius: 12px; background: var(--panel-2); color: var(--text);
-  cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+.tweet .actions a.small.primary {
+  background: linear-gradient(135deg, var(--purple), var(--magenta));
+  border-color: transparent; font-weight: 600;
 }
-.proposal-option:hover { border-color: var(--purple); filter: brightness(1.08); }
-.proposal-option:active { transform: translateY(1px); }
-.proposal-option.selected { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255,209,102,.28); }
-.proposal-option .option-number { color: var(--gold); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-.proposal-option .option-top { font-weight: 800; line-height: 1.2; }
-.proposal-option .option-bottom { color: var(--muted); line-height: 1.25; }
-.proposal-actions { margin-top: 12px; }
+.tweet .actions a.small:hover { filter: brightness(1.25); }
+.tweet .actions a.small:active { transform: translateY(1px); }
 
-@media (max-width: 700px) {
-  .proposal-options { grid-template-columns: 1fr; }
-  .proposal-option { min-height: 0; }
-  .proposal-actions button { flex: 1 1 100%; }
-  .format-row select { flex: 1 1 100%; }
-  .format-row button { flex: 1 1 100%; }
+/* Lista cronológica en una columna: el orden se lee de arriba abajo. */
+.feed { display: flex; flex-direction: column; gap: 10px; }
+
+.feed-day {
+  display: flex; align-items: center; gap: 10px;
+  margin: 6px 0 -2px; font-size: 12px; color: var(--muted);
 }
+.feed-day .label { color: var(--gold); font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+.feed-day .line { flex: 1; height: 1px; background: var(--line); }
 
-.tweet.processed .card-shot img {
-  max-height: 46vh;
-  object-fit: contain;
-  background: var(--preview-bg);
-}
-
-@media (max-width: 700px) {
-  .tweet.processed .card-shot img { max-height: 40vh; }
-}
-
-.preview {
-  background: var(--preview-bg) repeating-conic-gradient(var(--preview-alt) 0% 25%, var(--bg-code) 0% 50%) 50% / 22px 22px;
-  border: 1px solid var(--line); border-radius: var(--radius);
-  display: flex; align-items: center; justify-content: center;
-  min-height: 320px; padding: 12px; overflow: hidden;
-}
-.preview img { max-width: 100%; max-height: 62vh; border-radius: 8px; box-shadow: 0 12px 34px rgba(0,0,0,.6); }
-
-.log { max-height: 420px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.log { max-height: 320px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .log div { padding: 4px 0; border-bottom: 1px solid var(--line-soft); }
 .log .error { color: var(--error-soft); }
 
@@ -308,30 +281,23 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 .small { font-size: 12px; }
 .empty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
 
-/* Lista cronológica: una sola columna, para que el orden se lea de arriba
-   abajo sin ambigüedad. Con varias columnas la 2ª publicación más reciente
-   aparecía a la derecha y la lectura parecía desordenada. */
-.feed { display: flex; flex-direction: column; gap: 10px; max-width: 1080px; }
-
-.feed-day {
-  display: flex; align-items: center; gap: 10px;
-  margin: 14px 0 2px; padding-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-  position: sticky; top: 62px; z-index: 5;
-  background: linear-gradient(var(--bg) 70%, transparent);
+/* Ayuda plegada: el texto largo deja de ocupar la primera pantalla. */
+details.help { margin-top: 10px; }
+details.help summary {
+  cursor: pointer; color: var(--muted); font-size: 12px;
+  display: inline-flex; align-items: center; min-height: 28px;
 }
-.feed-day:first-child { margin-top: 0; }
-.feed-day .label { font-size: 13px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--gold); }
-.feed-day .count { font-size: 11.5px; color: var(--muted); }
-.feed-day .line { flex: 1; height: 1px; background: var(--line); }
+details.help summary:hover { color: var(--text); }
+details.help[open] summary { color: var(--text); }
 
-/* Dentro de la lista, la tarjeta ocupa todo el ancho disponible. */
-.feed .tweet { width: 100%; }
-.feed .thumbs img { width: 92px; height: 92px; }
+code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
 
+/* ------------------------------------------------------------------ */
+/* Avisos y carga                                                      */
+/* ------------------------------------------------------------------ */
 .toast {
-  position: fixed; right: 20px; bottom: 20px; z-index: 60;
-  display: flex; flex-direction: column; gap: 8px; max-width: 460px;
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  display: flex; flex-direction: column; gap: 8px; max-width: 380px;
 }
 .toast div {
   padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line);
@@ -349,63 +315,36 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Ayuda plegada: el texto largo sigue ahí, pero deja de ocupar la primera
-   pantalla. Siete párrafos sumaban 1.744 caracteres de lectura antes de llegar
-   al contenido. */
-details.help { margin-top: 10px; }
-details.help summary {
-  cursor: pointer; color: var(--muted); font-size: 12px;
-  display: inline-flex; align-items: center; min-height: 28px;
-}
-details.help summary:hover { color: var(--text); }
-details.help[open] summary { color: var(--text); }
-code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
-
-/* ==================================================================
-   Tabletas
-   ================================================================== */
+/* ------------------------------------------------------------------ */
+/* Tabletas                                                           */
+/* ------------------------------------------------------------------ */
 @media (max-width: 980px) {
   main { padding: 12px 14px 70px; }
-  .grid.cols-2 { grid-template-columns: 1fr; }
-  /* La previsualización fija taparía la pantalla en vertical. */
-  .sticky-preview { position: static; }
   header.top { padding: 10px 14px; gap: 10px; }
-  .editor-grid { grid-template-columns: 1fr; }
 }
 
-/* ==================================================================
-   Dispositivos táctiles, sea cual sea el ancho
-
-   Antes esto dependía solo del ancho (`max-width: 700px`), así que una
-   tableta de 768 px recibía los botones compactos de escritorio (28-37 px de
-   alto), demasiado pequeños para el dedo. Se decide por el tipo de puntero,
-   que es lo que de verdad importa, y se mantiene el ancho como respaldo.
-   ================================================================== */
+/* ------------------------------------------------------------------ */
+/* Táctil, sea cual sea el ancho                                      */
+/* ------------------------------------------------------------------ */
 @media (pointer: coarse) {
   button { min-height: 44px; padding: 10px 14px; }
   button.small { min-height: 44px; padding: 9px 12px; }
   input, select, textarea { font-size: 16px; padding: 10px 12px; }
-  .tweet .actions { gap: 8px; }
-  /* El resumen de la ayuda también se toca con el dedo. */
   details.help summary { min-height: 44px; }
+  .tweet .actions a.small { min-height: 44px; padding: 9px 12px; }
 }
 
-/* ==================================================================
-   Móvil
-   ================================================================== */
+/* ------------------------------------------------------------------ */
+/* Móvil                                                              */
+/* ------------------------------------------------------------------ */
 @media (max-width: 700px) {
   body {
     font-size: 15px;
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
-
-  /* iOS hace zoom al enfocar un campo de menos de 16px y descuadra la
-     página; con 16px se evita. (Se repite aquí por si el puntero se declara
-     fino, como en una ventana estrecha de escritorio.) */
+  /* iOS hace zoom al enfocar un campo de menos de 16px. */
   input, select, textarea { font-size: 16px; padding: 10px 12px; }
-
-  /* Objetivos táctiles cómodos. */
   button { min-height: 44px; padding: 10px 14px; }
   button.small { min-height: 44px; padding: 9px 12px; }
 
@@ -415,18 +354,10 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   .brand span { display: none; }
   .spacer { display: none; }
 
-  /* Los indicadores van agrupados por familia (tres más el reloj), así que
-     caben envolviendo. Antes eran diez en una tira deslizable de 1.377 px
-     dentro de 351 px: solo se veía la primera y media, y nada indicaba que
-     hubiera más. */
-  #provider-pills {
-    order: 3; width: 100%;
-    flex-wrap: wrap;
-    padding-bottom: 0;
-  }
+  /* Los indicadores van agrupados, así que caben envolviendo. */
+  #provider-pills { order: 3; width: 100%; flex-wrap: wrap; }
   #provider-pills .pill { flex: 0 1 auto; }
 
-  /* Pestañas deslizables en vez de apiladas. */
   nav.tabs { flex-wrap: nowrap; overflow-x: auto; padding: 10px 12px 0; -webkit-overflow-scrolling: touch; }
   nav.tabs button { flex: 0 0 auto; }
 
@@ -434,45 +365,13 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   .panel { padding: 13px; border-radius: 10px; }
   .panel h2 { font-size: 13px; }
 
-  /* Un encabezado fijo por día estorba al desplazar en vertical. */
   .feed-day { position: static; }
-
-  /* Los filtros van a ancho completo, uno por línea. */
   .row > * { min-width: 0 !important; }
   .row { gap: 8px; }
 
-  /* Miniaturas en tira deslizable lateral. */
-  .tweet .thumbs {
-    flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .tweet .thumbs img { width: 108px; height: 108px; flex: 0 0 auto; }
+  /* Los botones de cada publicación ocupan el ancho: se pulsan con el pulgar. */
+  .tweet .actions > * { flex: 1 1 100%; }
 
-  /* Los botones de cada publicación ocupan el ancho y se apilan. */
-  .tweet .actions { gap: 8px; }
-
-  /* Los estados se enseñan solo cuando tienen valor, así que caben de sobra.
-     Antes eran nueve en un carrusel horizontal con la barra **oculta**: cada
-     píldora se cortaba a sí misma («nuev», «selecc», «analiz») y ni se veía ni
-     se podía adivinar que hubiera más a la derecha. */
-  #counts {
-    flex-wrap: wrap;
-    padding-bottom: 0;
-  }
-  .tweet .actions button, .tweet .actions a {
-    flex: 1 1 auto; text-align: center;
-  }
-
-  .preview { min-height: 220px; }
-  .preview img { max-height: 46vh; }
-  .toast {
-    left: 12px; right: 12px; max-width: none;
-    bottom: calc(12px + env(safe-area-inset-bottom));
-  }
-  .log { max-height: 300px; }
-}
-
-/* Móvil en horizontal: se aprovecha el ancho extra. */
-@media (max-width: 900px) and (orientation: landscape) {
-  .preview img { max-height: 70vh; }
+  .toast { left: 12px; right: 12px; max-width: none; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .log { max-height: 240px; }
 }

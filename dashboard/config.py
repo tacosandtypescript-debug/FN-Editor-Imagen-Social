@@ -24,16 +24,8 @@ ENV_FILE = DASHBOARD_DIR / ".env"
 
 DB_PATH = VAR_DIR / "dashboard.sqlite3"
 MEDIA_DIR = VAR_DIR / "media"
-CARDS_DIR = VAR_DIR / "cards"
 PROFILES_DIR = VAR_DIR / "profiles"
 LOGS_DIR = VAR_DIR / "logs"
-
-#: Presets del repositorio por proporción de salida.
-PRESETS = {
-    "9:16": BIN_DIR / "preset.json",
-    "1:1": BIN_DIR / "preset_square.json",
-    "16:9": BIN_DIR / "preset_horizontal.json",
-}
 
 #: Instancias Nitter conocidas. Son inestables por naturaleza: el proveedor
 #: rota entre ellas y descarta las que fallan en tiempo de ejecución.
@@ -212,60 +204,11 @@ class Settings:
     )
     x_api_bearer: str = field(default_factory=lambda: _env("X_API_BEARER_TOKEN", ""))
 
-    # --- Análisis / redacción -----------------------------------------
-    analysis_provider: str = field(
-        default_factory=lambda: _env("DASHBOARD_ANALYSIS_PROVIDER", "codex")
-    )
-    openai_base_url: str = field(
-        default_factory=lambda: _env("DASHBOARD_OPENAI_BASE_URL", "https://api.openai.com/v1")
-    )
-    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
-    openai_model: str = field(
-        default_factory=lambda: _env("DASHBOARD_OPENAI_MODEL", "gpt-4o-mini")
-    )
-    analysis_timeout_seconds: int = field(
-        default_factory=lambda: _env_int("DASHBOARD_ANALYSIS_TIMEOUT", 120)
-    )
-    #: CLI de Codex: ruta explícita (si se deja vacío se busca solo).
-    codex_path: str = field(default_factory=lambda: _env("DASHBOARD_CODEX_PATH", ""))
-    codex_model: str = field(default_factory=lambda: _env("DASHBOARD_CODEX_MODEL", ""))
-    codex_timeout_seconds: int = field(
-        default_factory=lambda: _env_int("DASHBOARD_CODEX_TIMEOUT", 240)
-    )
-
-    # --- Telegram ------------------------------------------------------
-    telegram_bot_token: str = field(default_factory=lambda: _env("TELEGRAM_BOT_TOKEN", ""))
-    telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
-
-    # --- Composición ---------------------------------------------------
-    #: Proporción de las tarjetas. **Por defecto vertical**, que es lo que se
-    #: publica. Antes venía en «auto» y el formato lo acababa eligiendo la IA
-    #: de cada publicación según la orientación de las fotos de origen: unas
-    #: salían verticales, otras cuadradas y otras horizontales. Con un valor
-    #: concreto se respeta siempre; «auto» deja decidir al sistema.
-    default_format: str = field(
-        default_factory=lambda: _env("DASHBOARD_DEFAULT_FORMAT", "9:16")
-    )
-    default_fit: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_FIT", "auto"))
-    default_style: str = field(default_factory=lambda: _env("DASHBOARD_DEFAULT_STYLE", "auto"))
-    default_resolution: str = field(
-        default_factory=lambda: _env("DASHBOARD_DEFAULT_RESOLUTION", "4k")
-    )
-    default_backend: str = field(
-        default_factory=lambda: _env("DASHBOARD_DEFAULT_BACKEND", "auto")
-    )
-
 
 def ensure_directories() -> None:
     """Crea el árbol de trabajo local (ignorado por Git)."""
-    for path in (VAR_DIR, MEDIA_DIR, CARDS_DIR, PROFILES_DIR, LOGS_DIR):
+    for path in (VAR_DIR, MEDIA_DIR, PROFILES_DIR, LOGS_DIR):
         path.mkdir(parents=True, exist_ok=True)
-
-
-def preset_for_format(output_format: str | None) -> Path:
-    """Devuelve el preset del repositorio para una proporción dada."""
-    key = str(output_format or "").strip()
-    return PRESETS.get(key, PRESETS["9:16"])
 
 
 def is_loopback(address: str) -> bool:
@@ -377,16 +320,4 @@ def redacted(settings: Settings) -> dict:
         "browser_headless": settings.browser_headless,
         "browser_channel": settings.browser_channel,
         "x_api_bearer_set": bool(settings.x_api_bearer),
-        "analysis_provider": settings.analysis_provider,
-        "openai_base_url": settings.openai_base_url,
-        "openai_model": settings.openai_model,
-        "openai_api_key_set": bool(settings.openai_api_key),
-        "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
-        "telegram_chat_id_masked": mask(settings.telegram_chat_id),
-        "default_format": settings.default_format,
-        "default_fit": settings.default_fit,
-        "default_style": settings.default_style,
-        "default_resolution": settings.default_resolution,
-        "default_backend": settings.default_backend,
-        "presets": {key: str(path) for key, path in PRESETS.items()},
     }

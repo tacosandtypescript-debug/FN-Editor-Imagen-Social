@@ -1,25 +1,21 @@
 """Capa de servicio del dashboard.
 
-Aquí vive la lógica del flujo: descubrir, analizar, componer y entregar. No
-sabe nada de HTTP, así que se puede probar sola y reutilizar desde otro
-frontend si algún día hace falta.
+El dashboard es un **visor**: descubre publicaciones, las enseña y deja
+marcarlas como listas. Aquí vive esa lógica, sin nada de HTTP, para poder
+probarla sola.
+
+Ya no analiza, ni compone tarjetas, ni entrega nada: eso se quitó entero. La
+composición de tarjetas sigue viviendo en `bin/` del repositorio, que este
+dashboard ya no usa.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from . import config
-from . import previews
+from . import posts
 from . import timefmt
 from . import urls
 from .clock import CLOCK
-from .jobs import JobQueue
-from .pipeline import cards as cards_pipeline
-from .pipeline import media as media_pipeline
-from .providers import analysis as analysis_providers
-from .providers import telegram as telegram_providers
 from .providers import timelines as timeline_providers
 from .store import Store
 from . import store as store_module
@@ -47,198 +43,12 @@ class DashboardService:
     def __init__(self, store: Store | None = None, workers: int = 1) -> None:
         config.ensure_directories()
         self.store = store or Store()
-        #: «Procesar» es pesado (Codex ~30 s + composición 4K). Se atiende en
-        #: segundo plano para que el navegador no tenga que esperar: si el
-        #: móvil corta la petición, el trabajo se pierde aunque el servidor
-        #: hubiera terminado bien.
-        self.jobs = JobQueue(workers=workers)
+        #: Se acepta `workers` por compatibilidad con quien ya construía el
+        #: servicio así; ya no hay cola de trabajos que dimensionar.
+        self.workers = max(1, int(workers))
 
     def shutdown(self) -> None:
-        self.jobs.stop()
-
-    def jobs_state(self) -> dict:
-        return self.jobs.state()
-
-    def list_cards_view(self, limit: int = 200) -> list[dict]:
-        """Todas las tarjetas creadas, con su publicación y su última entrega.
-
-        Es la vista que faltaba: al procesar, la publicación sale de la bandeja
-        de pendientes y no había ningún sitio donde volver a verla para
-        enviarla o cambiarle el texto.
-        """
-        out: list[dict] = []
-        for card in self.store.list_cards()[: max(1, int(limit))]:
-            tweet = self.store.get_tweet(card["tweet_id"])
-            resumen: dict = {}
-            if tweet:
-                decorated = self._decorate_media(timefmt.decorate_tweet(dict(tweet), CLOCK))
-                resumen = {
-                    key: decorated.get(key)
-                    for key in (
-                        "tweet_id",
-                        "author_handle",
-                        "source_handle",
-                        "text",
-                        "url",
-                        "status",
-                        "posted_relative",
-                        "posted_absolute",
-                        "thumbs",
-                        "media",
-                    )
-                }
-            deliveries = self.store.list_deliveries(card["id"], limit=1)
-            out.append(
-                {
-                    "card": card,
-                    "tweet": resumen,
-                    "last_delivery": deliveries[0] if deliveries else None,
-                    "sent": bool(deliveries and deliveries[0].get("status") == "ok"),
-                    "editor_url": f"/editor.html?card={card['id']}",
-                }
-            )
-        return out
-
-    def enqueue_render(self, card_id: int, params: dict | None = None) -> dict:
-        """Encola la recomposición de una tarjeta (por ejemplo, otro formato).
-
-        Recomponer a resolución nativa tarda y descarga medios: se atiende en
-        segundo plano para no dejar al navegador esperando, igual que el resto.
-        """
-        card = self.get_card(card_id)
-        formato = str((params or {}).get("format") or "").strip()
-        label = f"recomponer la tarjeta {card_id}" + (f" en {formato}" if formato else "")
-
-        def trabajo() -> dict:
-            return self.render_card(card_id, params)
-
-        job = self.jobs.submit("recomponer", label, trabajo)
-        self.store.log(
-            f"Encolada la recomposición de la tarjeta {card_id}"
-            + (f" con formato {formato}" if formato else "")
-            + f" (trabajo {job.id})",
-            tweet_id=card["tweet_id"],
-        )
-        return job.as_dict()
-
-    def enqueue_regenerate(
-        self,
-        card_id: int,
-        instructions: str | None = None,
-        provider: str | None = None,
-        render: bool = True,
-    ) -> dict:
-        """Encola la regeneración del texto de una tarjeta ya creada."""
-        card = self.get_card(card_id)
-        label = f"texto de la tarjeta {card_id}"
-
-        def trabajo() -> dict:
-            return self.regenerate_text(
-                card_id, instructions=instructions, render=render, provider=provider
-            )
-
-        job = self.jobs.submit("regenerar", label, trabajo)
-        self.store.log(
-            f"Encolada la regeneración de texto de la tarjeta {card_id} (trabajo {job.id})",
-            tweet_id=card["tweet_id"],
-        )
-        return job.as_dict()
-
-    def enqueue_send(
-        self, card_id: int, caption: str | None = None, provider: str | None = None
-    ) -> dict:
-        """Encola la entrega de una tarjeta.
-
-        La subida puede tardar: el PNG sin comprimir ronda los 30 MB y por una
-        conexión móvil eso no cabe en una petición que el navegador espere.
-        """
-        card = self.get_card(card_id)
-        label = f"envío de la tarjeta {card_id}"
-
-        def trabajo() -> dict:
-            return self.send_card(card_id, caption=caption, provider=provider)
-
-        job = self.jobs.submit("enviar", label, trabajo)
-        self.store.log(
-            f"Encolada la entrega de la tarjeta {card_id} (trabajo {job.id})",
-            tweet_id=card["tweet_id"],
-        )
-        return job.as_dict()
-
-    def enqueue_proposals(
-        self,
-        tweet_id: str,
-        provider: str | None = None,
-        instructions: str | None = None,
-        previous_options: list[dict] | None = None,
-    ) -> dict:
-        """Encola la generación de tres pares, sin componer todavía."""
-        tweet = self.get_tweet(tweet_id)
-        if not tweet.get("media"):
-            raise DashboardError(
-                "la publicación no tiene imágenes: el compositor necesita al menos una"
-            )
-        handle = tweet.get("author_handle") or tweet.get("source_handle") or ""
-        label = f"propuestas · @{handle} · {tweet_id}"
-
-        def trabajo() -> dict:
-            try:
-                return self.propose_tweet(
-                    tweet_id,
-                    provider=provider,
-                    instructions=instructions,
-                    previous_options=previous_options,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.store.log(
-                    f"Propuestas fallidas para {tweet_id}: {str(exc)[:400]}",
-                    level="error",
-                    tweet_id=tweet_id,
-                )
-                raise
-
-        job = self.jobs.submit("propuestas", label, trabajo)
-        self.store.log(
-            f"Encolada la generación de propuestas para {tweet_id} (trabajo {job.id})",
-            tweet_id=tweet_id,
-        )
-        return job.as_dict()
-
-    def enqueue_process(
-        self,
-        tweet_id: str,
-        params: dict | None = None,
-        provider: str | None = None,
-        force_analysis: bool = False,
-        proposal: dict | None = None,
-    ) -> dict:
-        """Encola el procesado de una publicación y responde al instante."""
-        tweet = self.get_tweet(tweet_id)
-        if not tweet.get("media"):
-            raise DashboardError(
-                "la publicación no tiene imágenes: el compositor necesita al menos una"
-            )
-
-        handle = tweet.get("author_handle") or tweet.get("source_handle") or ""
-        label = f"@{handle} · {tweet_id}"
-
-        def trabajo() -> dict:
-            try:
-                return self.process_tweet(
-                    tweet_id, params, provider, force_analysis, proposal=proposal
-                )
-            except Exception as exc:  # noqa: BLE001
-                # La publicación no debe quedarse en «procesando» para siempre.
-                message = str(exc)[:400]
-                self.store.set_tweet_status(
-                    tweet_id, store_module.STATUS_FAILED, detail=message
-                )
-                raise
-
-        self.store.set_tweet_status(tweet_id, store_module.STATUS_PROCESSING)
-        job = self.jobs.submit("procesar", label, trabajo)
-        self.store.log(f"Encolado el procesado de {tweet_id} (trabajo {job.id})", tweet_id=tweet_id)
-        return job.as_dict()
+        """Nada que parar: el sondeo corre en su propio hilo (ver `poller`)."""
 
     # ------------------------------------------------------------------
     # Estado general
@@ -251,14 +61,12 @@ class DashboardService:
             "settings": config.redacted(settings),
             "accounts": self.store.list_accounts(),
             "counts": self.store.count_by_status(),
-            "timeline_providers": [status.__dict__ for status in timeline_providers.available_providers()],
-            "analysis_providers": [status.__dict__ for status in analysis_providers.available_providers()],
-            "delivery_providers": [status.__dict__ for status in telegram_providers.available_providers()],
+            "timeline_providers": [
+                status.__dict__ for status in timeline_providers.available_providers()
+            ],
             "profiles": timeline_providers.profile_directories(),
             "clock": self.clock_status(),
-            "analysis_status": self.analysis_status(),
             "maintenance": self.maintenance_state(),
-            "jobs": self.jobs_state(),
             "events": self.store.recent_events(40),
         }
 
@@ -317,7 +125,21 @@ class DashboardService:
     # Cuentas
     # ------------------------------------------------------------------
     def add_account(self, handle: str) -> dict:
-        account = self.store.add_account(handle)
+        """Añade una cuenta, validando antes el nombre.
+
+        Sin esta comprobación un handle vacío llegaba a la base de datos y el
+        fallo salía como error interno 500 en lugar de un 400 que explique qué
+        falta.
+        """
+        limpio = store_module.normalise_handle(str(handle or ""))
+        if not limpio:
+            raise DashboardError(
+                "hace falta un nombre de cuenta: escribe @cuenta o su enlace de X"
+            )
+        try:
+            account = self.store.add_account(limpio)
+        except Exception as exc:  # noqa: BLE001 - se muestra el motivo real
+            raise DashboardError(str(exc)[:200]) from exc
         self.store.log(f"Cuenta añadida: @{account['handle']}")
         return account
 
@@ -536,7 +358,7 @@ class DashboardService:
             if not url:
                 continue
             try:
-                info = media_pipeline.probe_post(url)
+                info = posts.probe_post(url)
             except Exception as exc:  # noqa: BLE001 - el enriquecido es opcional
                 tweet["_enrich_error"] = str(exc)[:200]
                 continue
@@ -551,29 +373,45 @@ class DashboardService:
     # Publicaciones
     # ------------------------------------------------------------------
     def list_tweets(self, **kwargs) -> list[dict]:
-        cards = self.store.latest_card_ids()
         tweets = [
             timefmt.decorate_tweet(tweet, CLOCK) for tweet in self.store.list_tweets(**kwargs)
         ]
         for tweet in tweets:
             self._decorate_media(tweet)
-            card_id = cards.get(tweet["tweet_id"])
-            tweet["card_id"] = card_id
-            tweet["has_card"] = card_id is not None
-            if card_id:
-                tweet["editor_url"] = f"/editor.html?card={card_id}"
         return tweets
 
     @staticmethod
     def _decorate_media(tweet: dict) -> dict:
-        """Añade la lista de miniaturas reducidas junto a los medios originales.
+        """Añade las miniaturas reducidas y marca cuáles son vídeo.
 
-        La lista `media` se conserva tal cual porque es la que se usa al
-        componer; `thumbs` es solo para mostrar, y pesa siete veces menos.
-        Devuelve el propio diccionario para poder encadenar la llamada.
+        La lista `media` se conserva tal cual; `thumbs` pide al CDN una versión
+        de 360 px, que pesa siete veces menos. Los vídeos de X se anuncian con
+        una miniatura (`amplify_video_thumb`), así que se detectan por la URL
+        para poder señalarlos y enlazarlos.
         """
-        tweet["thumbs"] = urls.thumbnails(tweet.get("media") or [])
+        medios = list(tweet.get("media") or [])
+        tweet["thumbs"] = urls.thumbnails(medios)
+        tweet["has_video"] = any("amplify_video" in str(url) for url in medios)
         return tweet
+
+    def mark_ready(self, tweet_id: str) -> dict:
+        """Marca una publicación como lista para que la limpieza no la borre.
+
+        La retención borra todo lo anterior a 48 h, sin mirar el estado. Esta
+        marca es la excepción: es la forma de decir «esta ya la vi y la quiero
+        conservar».
+        """
+        tweet = self.get_tweet(tweet_id)
+        self.store.set_tweet_status(tweet_id, store_module.STATUS_READY)
+        self.store.log(f"Marcada como lista: {tweet_id}", tweet_id=tweet_id)
+        return self.get_tweet(tweet_id)
+
+    def unmark_ready(self, tweet_id: str) -> dict:
+        """Devuelve una publicación marcada al montón, para poder limpiarla."""
+        tweet = self.get_tweet(tweet_id)
+        self.store.set_tweet_status(tweet_id, store_module.STATUS_NEW)
+        self.store.log(f"Desmarcada: {tweet_id}", tweet_id=tweet_id)
+        return self.get_tweet(tweet_id)
 
     def maintenance(self, force: bool = False) -> dict:
         """Limpia la bandeja según la retención configurada.
@@ -588,12 +426,6 @@ class DashboardService:
 
         outcome = self.store.purge_older_than(settings.retention_hours, config.MEDIA_DIR)
         self.store.set_setting("last_purge_at", self.now().replace(microsecond=0).isoformat())
-        # Las miniaturas reducidas también se podan: se regeneran solas si
-        # hicieran falta, así que no hay riesgo en borrarlas.
-        try:
-            outcome["previews_removed"] = previews.prune()
-        except Exception:  # noqa: BLE001 - la limpieza no debe tumbar el sondeo
-            outcome["previews_removed"] = 0
         if outcome["purged"]:
             self.store.log(
                 f"Limpieza: {outcome['purged']} publicación(es) de más de "
@@ -637,549 +469,6 @@ class DashboardService:
         self.store.set_tweet_status(tweet_id, status)
         return self.get_tweet(tweet_id)
 
-    def analyse(self, tweet_id: str, provider: str | None = None) -> dict:
-        """Analiza una publicación y guarda la propuesta editorial."""
-        tweet = self.get_tweet(tweet_id)
-        try:
-            result = analysis_providers.analyse_tweet(tweet, provider)
-        except Exception as exc:  # noqa: BLE001 - se reporta el motivo tal cual
-            message = str(exc)[:400]
-            self.store.set_tweet_status(tweet_id, "fallido", detail=message)
-            self.store.log(f"Análisis fallido de {tweet_id}: {message}", level="error", tweet_id=tweet_id)
-            raise DashboardError(message) from exc
-
-        self.store.update_tweet(tweet_id, analysis_json=result, status="analizado", status_detail=None)
-        self.store.log(
-            f"Análisis completado ({result['provider']}) para {tweet_id}",
-            tweet_id=tweet_id,
-        )
-        return self.get_tweet(tweet_id)
-
-    def propose_tweet(
-        self,
-        tweet_id: str,
-        provider: str | None = None,
-        instructions: str | None = None,
-        previous_options: list[dict] | None = None,
-    ) -> dict:
-        """Genera hasta tres pares de texto sin guardar ni componer todavía.
-
-        Solo se devuelven pares que **caben** en la tarjeta. Se comprobó en real
-        que el modelo puede escribir un texto de abajo de noventa caracteres y
-        que la composición falla después, cuando el usuario ya había elegido; por
-        eso se mide con el propio compositor y, si no salen tres válidas, se pide
-        otro trío más corto antes de mostrar nada.
-        """
-        tweet = self.get_tweet(tweet_id)
-        if not tweet.get("media"):
-            raise DashboardError(
-                "la publicación no tiene imágenes: el compositor necesita al menos una"
-            )
-
-        formato = str(config.Settings().default_format or "9:16").strip() or "9:16"
-        if formato == "auto":
-            formato = "9:16"
-
-        prompt_tweet = dict(tweet)
-        if instructions and instructions.strip():
-            prompt_tweet["instructions"] = instructions.strip()
-        if previous_options:
-            prompt_tweet["previous_options"] = list(previous_options)
-
-        opciones: list[dict] = []
-        descartadas: list[str] = []
-        vistos: set[tuple[str, str]] = set()
-        result: dict = {}
-        result_provider = provider or "codex"
-
-        for intento in range(2):
-            try:
-                result = analysis_providers.propose_tweet(prompt_tweet, provider)
-            except Exception as exc:  # noqa: BLE001 - se muestra en la interfaz
-                message = str(exc)[:500]
-                self.store.log(
-                    f"Propuestas fallidas para {tweet_id}: {message}",
-                    level="error",
-                    tweet_id=tweet_id,
-                )
-                raise DashboardError(message) from exc
-
-            result_provider = result.get("provider") or provider or "codex"
-            for cruda in result.get("options") or []:
-                try:
-                    opcion = analysis_providers.analysis_from_dict(
-                        cruda, provider=result_provider
-                    ).as_dict()
-                except Exception:  # noqa: BLE001 - una opción rota no tira las demás
-                    continue
-                clave = (opcion["top"], opcion["bottom"])
-                if clave in vistos:
-                    continue
-                vistos.add(clave)
-                cabe, motivo = cards_pipeline.text_fits(
-                    opcion["top"], opcion["bottom"], formato
-                )
-                if not cabe:
-                    descartadas.append(f"{opcion['bottom'][:48]}… ({motivo})")
-                    continue
-                # El texto de abajo debe aportar, no repetir el titular.
-                if analysis_providers.is_redundant_pair(opcion["top"], opcion["bottom"]):
-                    descartadas.append(
-                        f"{opcion['bottom'][:48]}… (repite el titular)"
-                    )
-                    continue
-                opciones.append(opcion)
-
-            if len(opciones) >= 3:
-                break
-            # Faltan opciones: el trío anterior se pasó de largo. Se pide otro
-            # más corto sin repetir lo ya visto.
-            prompt_tweet["previous_options"] = [
-                {"top": o["top"], "bottom": o["bottom"]} for o in opciones
-            ] + list(previous_options or [])
-            prompt_tweet["instructions"] = (
-                "Las opciones anteriores no servían: o el texto de abajo no cabía "
-                "en la tarjeta, o repetía lo mismo que el titular. Genera tres "
-                "pares nuevos y distintos, con MÁXIMO 52 caracteres en \"bottom\" "
-                "y 48 en \"top\", y con un texto de abajo que APORTE información "
-                "que no esté ya en el titular."
-            )
-
-        if descartadas:
-            self.store.log(
-                f"Descartadas {len(descartadas)} propuesta(s) que no cabían en la "
-                f"tarjeta {formato}: " + " | ".join(descartadas[:3]),
-                tweet_id=tweet_id,
-            )
-        if not opciones:
-            raise DashboardError(
-                "ninguna propuesta cabe en la tarjeta; prueba a pedir otras o "
-                "acorta el texto a mano en el editor"
-            )
-
-        primera = opciones[0]
-        return {
-            "tweet_id": tweet_id,
-            "options": opciones[:3],
-            "caption": result.get("caption") or primera.get("caption") or "",
-            "hashtags": result.get("hashtags") or primera.get("hashtags") or [],
-            "suggested_format": result.get("suggested_format") or primera.get("suggested_format"),
-            "suggested_style": result.get("suggested_style") or primera.get("suggested_style"),
-            "reasoning": result.get("reasoning") or "",
-            "provider": result_provider,
-            "discarded": len(descartadas),
-            "format": formato,
-        }
-
-    def process_tweet(
-        self,
-        tweet_id: str,
-        params: dict | None = None,
-        provider: str | None = None,
-        force_analysis: bool = False,
-        proposal: dict | None = None,
-    ) -> dict:
-        """Compone una publicación, usando el par elegido si se recibió.
-
-        El flujo nuevo llama primero a :meth:`propose_tweet`; esta función solo
-        se ejecuta después de que el usuario confirme una de las tres opciones.
-        Se conserva el camino antiguo sin ``proposal`` para compatibilidad con
-        el editor y con scripts existentes.
-        """
-        tweet = self.get_tweet(tweet_id)
-        if not tweet.get("media"):
-            raise DashboardError(
-                "la publicación no tiene imágenes: el compositor necesita al menos una"
-            )
-
-        done: list[str] = []
-        if proposal is not None:
-            try:
-                selected = analysis_providers.analysis_from_dict(
-                    proposal,
-                    provider=str(proposal.get("provider") or provider or "codex"),
-                )
-            except Exception as exc:  # noqa: BLE001
-                raise DashboardError(f"la opción elegida no es válida: {exc}") from exc
-            selected_data = selected.as_dict()
-            self.store.update_tweet(
-                tweet_id,
-                analysis_json=selected_data,
-                status="seleccionado",
-                status_detail=None,
-            )
-            selected_params = dict(params or {})
-            selected_params.update(
-                {
-                    "top": selected_data["top"],
-                    "bottom": selected_data["bottom"],
-                    "caption": selected_data["caption"],
-                    "hashtags": selected_data["hashtags"],
-                }
-            )
-            params = selected_params
-            done.append("par elegido")
-        else:
-            existing = tweet.get("analysis") or {}
-            current = str(existing.get("provider") or "").strip().lower()
-            configured = (
-                provider or config.Settings().analysis_provider or ""
-            ).strip().lower()
-            needs_analysis = (
-                force_analysis
-                or not existing
-                or current in {"", "manual"}
-                or (configured and current != configured)
-            )
-            if needs_analysis:
-                self.analyse(tweet_id, provider)
-                done.append("análisis de texto")
-            else:
-                done.append("análisis ya existente")
-
-        card = self.prepare_card(tweet_id, params)
-        done.append("descarga de medios y composición")
-
-        return {
-            "card": card,
-            "tweet": self.get_tweet(tweet_id),
-            "steps": done,
-            "editor_url": f"/editor.html?card={card['id']}",
-        }
-
-    def test_analysis(self, tweet_id: str, provider: str | None = None) -> dict:
-        """Prueba el análisis sin guardarlo ni tocar la tarjeta.
-
-        Sirve para comprobar que el proveedor responde (por ejemplo, que la
-        sesión de ChatGPT está iniciada) antes de procesar nada.
-        """
-        tweet = self.get_tweet(tweet_id)
-        try:
-            result = analysis_providers.analyse_tweet(tweet, provider)
-        except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:500]
-            self.store.log(f"Prueba de análisis fallida: {message}", level="error", tweet_id=tweet_id)
-            raise DashboardError(message) from exc
-        self.store.log(
-            f"Prueba de análisis correcta con {result.get('provider')}", tweet_id=tweet_id
-        )
-        return {"analysis": result, "tweet_id": tweet_id, "saved": False}
-
-    def open_chatgpt_login(self) -> dict:
-        """Abre una ventana de Chrome con el perfil de ChatGPT para entrar."""
-        provider = analysis_providers.BrowserChatGPTAnalysis()
-        try:
-            outcome = provider.open_login_window()
-        except Exception as exc:  # noqa: BLE001
-            raise DashboardError(str(exc)[:400]) from exc
-        self.store.log("Ventana de ChatGPT abierta para iniciar sesión")
-        return outcome
-
-    def analysis_status(self) -> dict:
-        """Estado de los proveedores de análisis, para la interfaz."""
-        from .providers import codex_cli
-
-        provider = analysis_providers.BrowserChatGPTAnalysis()
-        executable = codex_cli.find_codex_executable()
-        return {
-            "chatgpt_profile": str(provider.profile),
-            "chatgpt_logged_in": provider.profile_logged_in(),
-            "codex_executable": executable,
-            "codex_auth_mode": codex_cli.auth_mode(),
-            "codex_candidates": codex_cli.candidate_paths()[:5],
-            "providers": [status.__dict__ for status in analysis_providers.available_providers()],
-        }
-
-    # ------------------------------------------------------------------
-    # Tarjetas
-    # ------------------------------------------------------------------
-    def media_directory(self, tweet_id: str) -> Path:
-        return config.MEDIA_DIR / str(tweet_id)
-
-    def download_media(self, tweet_id: str) -> dict:
-        """Descarga los medios del post una sola vez y los conserva.
-
-        Reutiliza `fetch_media.download_link_info`, así que respeta el orden,
-        el límite de 25 MB por archivo y la validación del flujo actual.
-        """
-        tweet = self.get_tweet(tweet_id)
-        target = self.media_directory(tweet_id)
-        existing = sorted(
-            path for path in target.glob("*") if path.is_file() and not path.name.startswith(".")
-        )
-        if existing:
-            return {"downloaded": False, "images": [str(path) for path in existing]}
-        if not tweet.get("media"):
-            # Aviso temprano y claro en vez del error genérico del descargador.
-            raise DashboardError(
-                "la publicación no tiene imágenes y el compositor necesita al menos una"
-            )
-        if not tweet.get("url"):
-            raise DashboardError("la publicación no tiene enlace de origen")
-        try:
-            info = media_pipeline.download_media(tweet["url"], target)
-        except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:400]
-            self.store.log(f"Fallo al descargar medios de {tweet_id}: {message}", level="error", tweet_id=tweet_id)
-            raise DashboardError(f"no se pudieron descargar los medios: {message}") from exc
-
-        images = [item["path"] for item in info["images"]]
-        if not images:
-            raise DashboardError(
-                "la publicación no tiene imágenes: el compositor necesita al menos una"
-            )
-        # Se guardan las URLs originales en orden (las que realmente se bajaron).
-        ordered_urls = [item.get("url") for item in info["images"] if item.get("url")]
-        if ordered_urls:
-            self.store.update_tweet(tweet_id, media_json=ordered_urls)
-        self.store.log(f"Medios descargados para {tweet_id}: {len(images)} archivo(s)", tweet_id=tweet_id)
-        return {"downloaded": True, "images": images, "post_text": info.get("post_text")}
-
-    def default_params(self, tweet_id: str) -> dict:
-        """Parámetros iniciales de composición a partir del análisis guardado."""
-        tweet = self.get_tweet(tweet_id)
-        settings = config.Settings()
-        analysis = tweet.get("analysis") or {}
-        # El formato elegido manda. La sugerencia de la IA solo se usa cuando
-        # se ha pedido «auto»: antes se imponía siempre, así que cada tarjeta
-        # salía con la proporción que a la IA le parecía según las fotos de
-        # origen y era imposible pedir vertical de forma fiable.
-        chosen_format = str(settings.default_format or "auto").strip() or "auto"
-        if chosen_format == "auto":
-            chosen_format = analysis.get("suggested_format") or "auto"
-        return {
-            "top": analysis.get("top") or _fallback_title(tweet),
-            "bottom": analysis.get("bottom") or _fallback_context(tweet),
-            "format": chosen_format,
-            "format_is_forced": settings.default_format not in ("", "auto"),
-            "suggested_format": analysis.get("suggested_format") or None,
-            "fit": settings.default_fit,
-            "style": settings.default_style,
-            "resolution": settings.default_resolution,
-            "backend": settings.default_backend,
-            "caption": analysis.get("caption") or "",
-            "hashtags": analysis.get("hashtags") or [],
-        }
-
-    def prepare_card(self, tweet_id: str, params: dict | None = None) -> dict:
-        """Descarga medios (si hace falta) y compone la tarjeta.
-
-        Cada publicación tiene una sola tarjeta de trabajo: si ya existe, se
-        vuelve a componer sobre ella en lugar de acumular copias.
-        """
-        tweet = self.get_tweet(tweet_id)
-        self.download_media(tweet_id)
-        images = sorted(
-            path for path in self.media_directory(tweet_id).glob("*") if path.is_file()
-        )
-        merged = {**self.default_params(tweet_id), **(params or {})}
-        existing = self.store.latest_card(tweet_id)
-        return self._render(
-            tweet_id, images, merged, tweet, card_id=existing["id"] if existing else None
-        )
-
-    def render_card(self, card_id: int, params: dict | None = None) -> dict:
-        """Vuelve a componer una tarjeta existente con nuevos parámetros."""
-        card = self.store.get_card(card_id)
-        if not card:
-            raise DashboardError(f"no existe la tarjeta {card_id}")
-        tweet = self.get_tweet(card["tweet_id"])
-        images = sorted(
-            path for path in self.media_directory(card["tweet_id"]).glob("*") if path.is_file()
-        )
-        if not images:
-            raise DashboardError("no hay medios descargados para esta publicación")
-        merged = {**(card.get("params") or {}), **(params or {})}
-        return self._render(card["tweet_id"], images, merged, tweet, card_id=card_id)
-
-    def _render(
-        self,
-        tweet_id: str,
-        images: list[Path],
-        params: dict,
-        tweet: dict,
-        card_id: int | None = None,
-    ) -> dict:
-        # El nombre del archivo lleva la versión para que dos tarjetas de la
-        # misma publicación nunca se pisen entre sí.
-        if card_id:
-            version = int(self.store.get_card(card_id)["version"])
-        else:
-            previous = self.store.latest_card(tweet_id)
-            version = int(previous["version"]) + 1 if previous else 1
-        output = config.CARDS_DIR / f"{tweet_id}-v{version}.png"
-        try:
-            result = cards_pipeline.render_card(images=images, output=output, params=params)
-        except cards_pipeline.CardError as exc:
-            self.store.set_tweet_status(tweet_id, "fallido", detail=str(exc))
-            self.store.log(f"Composición fallida de {tweet_id}: {exc}", level="error", tweet_id=tweet_id)
-            raise DashboardError(str(exc)) from exc
-
-        stored_params = {
-            **params,
-            "top": result["params"]["top"],
-            "bottom": result["params"]["bottom"],
-            "format": result["params"]["format"],
-            "fit": result["params"]["fit"],
-            "style": result["params"]["style"],
-            "resolution": result["params"]["resolution"],
-            "backend": result["params"]["backend"],
-        }
-        meta = {
-            "width": result["width"],
-            "height": result["height"],
-            "style": result["style"],
-            "output_format": result["output_format"],
-            "resolution": result["resolution"],
-            "images": result["images"],
-            "backend": result["backend"],
-            "verification": result["verification"],
-            "preset": result["preset"],
-        }
-
-        if card_id:
-            self.store.update_card(card_id, output_path=result["output"], meta=meta, params=stored_params)
-            card = self.store.get_card(card_id)
-        else:
-            card = self.store.create_card(
-                tweet_id, stored_params, output_path=result["output"], meta=meta
-            )
-        self.store.set_tweet_status(tweet_id, "tarjeta_lista")
-        self.store.mark_processed(tweet_id)
-        self.store.log(
-            f"Tarjeta v{card['version']} generada para {tweet_id} "
-            f"({result['width']}x{result['height']})",
-            tweet_id=tweet_id,
-        )
-        return card
-
-    def get_card(self, card_id: int) -> dict:
-        card = self.store.get_card(card_id)
-        if not card:
-            raise DashboardError(f"no existe la tarjeta {card_id}")
-        return card
-
-    def regenerate_text(
-        self,
-        card_id: int,
-        *,
-        instructions: str | None = None,
-        render: bool = True,
-        provider: str | None = None,
-    ) -> dict:
-        """Vuelve a generar **solo el texto**: titular, texto inferior y caption.
-
-        No toca los medios descargados ni ningún otro ajuste de la tarjeta: es
-        la operación pensada para cuando el texto no convence y se quiere otra
-        propuesta sin rehacer el resto.
-
-        Se le pasa al modelo el texto anterior para que no repita lo mismo y,
-        opcionalmente, una indicación del usuario («más corto», «otro
-        enfoque»).
-        """
-        card = self.get_card(card_id)
-        tweet = self.get_tweet(card["tweet_id"])
-        params = dict(card.get("params") or {})
-
-        prompt_tweet = dict(tweet)
-        previous = {
-            "top": params.get("top") or "",
-            "bottom": params.get("bottom") or "",
-            "caption": params.get("caption") or "",
-        }
-        if any(previous.values()):
-            prompt_tweet["previous"] = previous
-        if instructions and instructions.strip():
-            prompt_tweet["instructions"] = instructions.strip()
-
-        try:
-            result = analysis_providers.analyse_tweet(prompt_tweet, provider)
-        except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:400]
-            self.store.log(
-                f"Regeneración de texto fallida en la tarjeta {card_id}: {message}",
-                level="error",
-                tweet_id=card["tweet_id"],
-            )
-            raise DashboardError(message) from exc
-
-        params["top"] = result["top"]
-        params["bottom"] = result["bottom"]
-        params["caption"] = result["caption"]
-        params["hashtags"] = result["hashtags"]
-        self.store.update_card(card_id, params=params)
-        self.store.update_tweet(card["tweet_id"], analysis_json=result)
-
-        self.store.log(
-            f"Texto regenerado en la tarjeta {card_id} ({result['provider']})"
-            + (f" con indicación: {instructions.strip()[:60]}" if instructions else ""),
-            tweet_id=card["tweet_id"],
-        )
-
-        refreshed = self.get_card(card_id)
-        if render:
-            refreshed = self.render_card(card_id, params)
-        return {
-            "card": refreshed,
-            "analysis": result,
-            "text_only": True,
-            "rendered": bool(render),
-        }
-
-    def card_image(self, card_id: int) -> Path:
-        card = self.get_card(card_id)
-        path = Path(card.get("output_path") or "")
-        if not path.is_file():
-            raise DashboardError("la tarjeta todavía no tiene imagen generada")
-        return path
-
-    # ------------------------------------------------------------------
-    # Entrega
-    # ------------------------------------------------------------------
-    def send_card(
-        self,
-        card_id: int,
-        *,
-        caption: str | None = None,
-        provider: str | None = None,
-    ) -> dict:
-        card = self.get_card(card_id)
-        tweet = self.get_tweet(card["tweet_id"])
-        path = self.card_image(card_id)
-
-        params = card.get("params") or {}
-        final_caption = caption
-        if final_caption is None:
-            final_caption = params.get("caption") or ""
-        hashtags = params.get("hashtags") or []
-        if hashtags and not any(tag in final_caption for tag in hashtags):
-            final_caption = (final_caption + " " + " ".join(hashtags)).strip()
-        if not final_caption:
-            final_caption = f"{params.get('top', '')} · {tweet.get('url', '')}".strip()
-
-        delivery = telegram_providers.get_delivery_provider(provider)
-        status = delivery.status()
-        if provider and not status.available:
-            raise DashboardError(status.detail)
-        try:
-            outcome = delivery.send(path, final_caption)
-        except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:400]
-            self.store.record_delivery(card_id, delivery.name, "fallido", message)
-            self.store.log(f"Entrega fallida de la tarjeta {card_id}: {message}", level="error")
-            raise DashboardError(message) from exc
-
-        self.store.record_delivery(card_id, delivery.name, "ok", json.dumps(outcome, ensure_ascii=False))
-        self.store.set_tweet_status(card["tweet_id"], "enviado")
-        self.store.log(
-            f"Tarjeta {card_id} entregada con {outcome.get('method')} vía {delivery.name}",
-            tweet_id=card["tweet_id"],
-        )
-        return {"delivery": outcome, "caption": final_caption, "card": card}
-
-    def deliveries(self, card_id: int | None = None) -> list[dict]:
-        return self.store.list_deliveries(card_id)
-
 
 # ----------------------------------------------------------------------
 def _normalise_date(value: str) -> str | None:
@@ -1195,14 +484,3 @@ def _normalise_date(value: str) -> str | None:
     except (TypeError, ValueError):
         return value or None
     return parsed.isoformat()
-
-
-def _fallback_title(tweet: dict) -> str:
-    text = (tweet.get("text") or "").strip()
-    first = text.splitlines()[0] if text else ""
-    return (first or "TITULAR PENDIENTE")[:90].upper()
-
-
-def _fallback_context(tweet: dict) -> str:
-    """Texto neutro mientras el usuario todavía no ha elegido una propuesta."""
-    return "CONTEXTO PENDIENTE"

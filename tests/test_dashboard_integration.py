@@ -1,8 +1,7 @@
 """Tests de integración del dashboard.
 
-Ejercitan el compositor real y la API HTTP completa sin salir a la red: los
-medios se colocan ya descargados en el directorio de trabajo y el análisis y
-la entrega usan los proveedores que no necesitan credenciales.
+El dashboard es un visor: descubre publicaciones, las enseña y las marca. Estos
+tests recorren eso de punta a punta, incluida la API HTTP, sin salir a la red.
 """
 
 import json
@@ -20,17 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PIL import Image  # noqa: E402
-
 from dashboard import config  # noqa: E402
 from dashboard.poller import Poller  # noqa: E402
-from dashboard.providers import analysis as analysis_providers  # noqa: E402
 from dashboard.server import create_server  # noqa: E402
 from dashboard.service import DashboardError, DashboardService  # noqa: E402
-from dashboard.store import Store  # noqa: E402
-
-#: Se guarda para restaurarlo tras los stubs de análisis.
-original_analyse = analysis_providers.analyse_tweet
+from dashboard.store import STATUS_NEW, STATUS_READY, Store  # noqa: E402
 
 
 class DashboardIntegrationTests(unittest.TestCase):
@@ -43,7 +36,6 @@ class DashboardIntegrationTests(unittest.TestCase):
                 "VAR_DIR",
                 "DB_PATH",
                 "MEDIA_DIR",
-                "CARDS_DIR",
                 "PROFILES_DIR",
                 "LOGS_DIR",
             )
@@ -51,17 +43,9 @@ class DashboardIntegrationTests(unittest.TestCase):
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
-
-        # Los tests nunca deben invocar al CLI de Codex real: sería lento y
-        # consumiría la suscripción del usuario en cada ejecución.
-        key = "DASHBOARD_ANALYSIS_PROVIDER"
-        self._provider_before = os.environ.get(key)
-        os.environ[key] = "manual"
-        self.addCleanup(self._restore_provider, key)
 
         self.service = DashboardService(store=Store(config.DB_PATH))
         self.tweet_id = "2105562614461776336"
@@ -78,11 +62,7 @@ class DashboardIntegrationTests(unittest.TestCase):
                 }
             ]
         )
-        # Medios ya presentes: así no se sale a la red.
-        media_dir = self.service.media_directory(self.tweet_id)
-        media_dir.mkdir(parents=True, exist_ok=True)
-        self.source = media_dir / "01.png"
-        Image.new("RGB", (640, 360), (35, 90, 170)).save(self.source)
+        self.service.store.add_account("ShiinaBR")
 
     def tearDown(self):
         # Esta clase no levanta servidor ni sondeador: solo el servicio.
@@ -97,475 +77,56 @@ class DashboardIntegrationTests(unittest.TestCase):
         else:
             os.environ[key] = self._provider_before
 
-    # ------------------------------------------------------------------
-    def test_prepare_card_renders_and_validates_output(self):
-        card = self.service.prepare_card(
-            self.tweet_id,
-            {"top": "NUEVO {MAPA|8B3DFF}", "bottom": "FORTNITEMARES · 01/10",
-             "format": "auto", "resolution": "native", "backend": "cpu"},
-        )
-        self.assertEqual(card["version"], 1)
-        self.assertTrue(card["meta"]["verification"]["ok"])
-        path = Path(card["output_path"])
-        self.assertTrue(path.is_file())
-        with Image.open(path) as image:
-            self.assertEqual(image.format, "PNG")
-            self.assertEqual(image.mode, "RGBA")
-            # Con «auto», la fuente 640x360 (horizontal) lleva al preset 16:9
-            # del repositorio: el modo automático sigue funcionando.
-            self.assertEqual((image.width, image.height), (1920, 1080))
-        self.assertEqual(self.service.get_tweet(self.tweet_id)["status"], "tarjeta_lista")
+    # --- marcar como listo ---------------------------------------------
+    def test_marking_as_ready_changes_the_status(self):
+        tweet = self.service.mark_ready(self.tweet_id)
+        self.assertEqual(tweet["status"], STATUS_READY)
 
-    def test_the_default_render_is_vertical(self):
-        """Sin pedir nada, la tarjeta sale vertical aunque la fuente sea ancha.
+    def test_unmarking_returns_it_to_the_pile(self):
+        self.service.mark_ready(self.tweet_id)
+        tweet = self.service.unmark_ready(self.tweet_id)
+        self.assertEqual(tweet["status"], STATUS_NEW)
 
-        Antes el formato lo imponía la sugerencia de la IA según las fotos de
-        origen, así que la misma publicación podía salir cuadrada.
-        """
-        card = self.service.prepare_card(
-            self.tweet_id,
-            {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"},
-        )
-        with Image.open(Path(card["output_path"])) as image:
-            self.assertEqual((image.width, image.height), (1080, 1920))
-        self.assertEqual(card["params"]["format"], "9:16")
-
-    def test_prepare_card_reuses_the_same_card(self):
-        first = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        second = self.service.prepare_card(
-            self.tweet_id, {"top": "C", "bottom": "D", "resolution": "native", "backend": "cpu"}
-        )
-        self.assertEqual(first["id"], second["id"])
-        self.assertEqual(second["version"], 1)
-        self.assertEqual(second["params"]["top"], "C")
-        self.assertEqual(len(self.service.store.list_cards(self.tweet_id)), 1)
-
-    def test_render_existing_card_keeps_one_file_per_version(self):
-        card = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        updated = self.service.render_card(
-            card["id"],
-            {"top": "OTRO TITULAR", "bottom": "OTRO CONTEXTO", "format": "1:1"},
-        )
-        self.assertEqual(updated["id"], card["id"])
-        self.assertEqual(updated["meta"]["width"], updated["meta"]["height"])
-        self.assertTrue(Path(updated["output_path"]).is_file())
-
-    def test_card_without_media_is_refused_with_a_clear_message(self):
-        self.service.store.upsert_tweets(
-            [{"tweet_id": "999", "source_handle": "c", "text": "solo texto"}]
-        )
-        with self.assertRaises(DashboardError) as context:
-            self.service.prepare_card("999", {"top": "A", "bottom": "B"})
-        self.assertIn("no tiene imágenes", str(context.exception))
-
-    def test_analysis_with_manual_provider_needs_no_network(self):
-        tweet = self.service.analyse(self.tweet_id, provider="manual")
-        self.assertEqual(tweet["status"], "analizado")
-        self.assertIsNotNone(tweet["analysis"])
-        self.assertEqual(len(tweet["analysis"]["hashtags"]), 5)
-        self.assertIn("#khetzalgg", tweet["analysis"]["hashtags"])
-
-    def test_send_card_with_local_delivery(self):
-        card = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        outcome = self.service.send_card(card["id"], caption="prueba", provider="local")
-        self.assertTrue(outcome["delivery"]["ok"])
-        self.assertEqual(outcome["delivery"]["method"], "archivo-local")
-        self.assertEqual(self.service.get_tweet(self.tweet_id)["status"], "enviado")
-        self.assertEqual(len(self.service.deliveries(card["id"])), 1)
-
-    def test_failed_card_marks_the_tweet_as_fallido(self):
+    def test_marking_an_unknown_publication_is_reported(self):
         with self.assertRaises(DashboardError):
-            self.service.prepare_card(self.tweet_id, {"top": "", "bottom": "B"})
-        tweet = self.service.get_tweet(self.tweet_id)
-        self.assertEqual(tweet["status"], "fallido")
-        self.assertIn("titular", tweet["status_detail"])
+            self.service.mark_ready("999999")
 
-    # --- botón «Procesar» ---------------------------------------------
-    def test_process_tweet_does_analysis_media_and_card_in_one_step(self):
-        result = self.service.process_tweet(self.tweet_id, {"resolution": "native", "backend": "cpu"})
-        self.assertIn("análisis de texto", result["steps"])
-        self.assertIn("descarga de medios y composición", result["steps"])
-        self.assertEqual(result["card"]["version"], 1)
-        self.assertTrue(result["card"]["meta"]["verification"]["ok"])
-        self.assertEqual(result["editor_url"], f"/editor.html?card={result['card']['id']}")
-        self.assertEqual(result["tweet"]["status"], "tarjeta_lista")
+    def test_ready_publications_leave_the_pending_view(self):
+        """Marcar listo la aparta: es la marca que la salva de la limpieza."""
+        self.service.mark_ready(self.tweet_id)
+        self.assertEqual(self.service.list_tweets(pending_only=True), [])
+        self.assertEqual(len(self.service.list_tweets()), 1)
 
-    def test_process_tweet_refuses_publications_without_images(self):
+    # --- vídeos --------------------------------------------------------
+    def _una(self, tweet_id):
+        return [
+            tweet for tweet in self.service.list_tweets(limit=20)
+            if tweet["tweet_id"] == tweet_id
+        ][0]
+
+    def test_a_video_is_flagged_as_such(self):
+        """Los vídeos de X llegan como miniatura; se señalan para distinguirlos."""
         self.service.store.upsert_tweets(
-            [{"tweet_id": "888", "source_handle": "c", "text": "solo texto"}]
-        )
-        with self.assertRaises(DashboardError) as context:
-            self.service.process_tweet("888")
-        self.assertIn("no tiene imágenes", str(context.exception))
-
-    # --- análisis con IA al procesar -----------------------------------
-    def _use_provider(self, name):
-        """Fija el proveedor configurado durante el test."""
-        key = "DASHBOARD_ANALYSIS_PROVIDER"
-        original = os.environ.get(key)
-
-        def restore():
-            if original is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = original
-
-        os.environ[key] = name
-        self.addCleanup(restore)
-
-    def _stub_proposals(self, options, caption="caption", hashtags=None):
-        captured = {}
-
-        def fake_propose(tweet, preferred=None):
-            captured["tweet"] = dict(tweet)
-            return {
-                "options": [
-                    {
-                        "top": top,
-                        "bottom": bottom,
-                        "caption": caption,
-                        "hashtags": hashtags or ["#khetzalgg"],
-                        "suggested_format": "9:16",
-                        "reasoning": "stub",
-                        "provider": "stub",
-                    }
-                    for top, bottom in options
-                ],
-                "caption": caption,
-                "hashtags": hashtags or ["#khetzalgg"],
-                "suggested_format": "9:16",
-                "reasoning": "stub",
-                "provider": "stub",
-            }
-
-        original = analysis_providers.propose_tweet
-        analysis_providers.propose_tweet = fake_propose
-        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
-        return captured
-
-    def test_proposals_are_three_choices_and_do_not_compose_yet(self):
-        captured = self._stub_proposals(
             [
-                ("OPCION UNO {MAPA|FF7A00}", "CONTEXTO UNO {NUEVO|8B3DFF}"),
-                ("OPCION DOS {MODO|FF39D7}", "CONTEXTO DOS {CAMBIO|42E8FF}"),
-                ("OPCION TRES {NOVEDAD|FFD166}", "CONTEXTO TRES {FECHA|B84DFF}"),
+                {
+                    "tweet_id": "777",
+                    "source_handle": "cuenta",
+                    "text": "con video",
+                    "media": ["https://pbs.twimg.com/amplify_video_thumb/AAA/img/x.jpg"],
+                }
             ]
         )
-        result = self.service.propose_tweet(self.tweet_id, provider="codex")
-        self.assertEqual(len(result["options"]), 3)
-        self.assertEqual(result["options"][0]["top"], "OPCION UNO {MAPA|FF7A00}")
-        self.assertEqual(captured["tweet"]["tweet_id"], self.tweet_id)
-        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
+        self.assertTrue(self._una("777")["has_video"])
 
-    def test_selected_proposal_is_the_one_that_gets_composed(self):
-        selected = {
-            "top": "ELEGIDA {MAPA|FF7A00}",
-            "bottom": "CONTEXTO ELEGIDO {NUEVO|8B3DFF}",
-            "caption": "caption elegido",
-            "hashtags": ["#khetzalgg"],
-            "provider": "codex",
-        }
-        result = self.service.process_tweet(
-            self.tweet_id,
-            {"resolution": "native", "backend": "cpu"},
-            provider="codex",
-            proposal=selected,
-        )
-        self.assertIn("par elegido", result["steps"])
-        self.assertEqual(result["card"]["params"]["top"], selected["top"])
-        self.assertEqual(result["card"]["params"]["bottom"], selected["bottom"])
-        self.assertEqual(self.service.get_tweet(self.tweet_id)["analysis"]["top"], selected["top"])
+    def test_a_photo_is_not_flagged_as_video(self):
+        self.assertFalse(self._una(self.tweet_id)["has_video"])
 
-    def test_regenerating_proposals_receives_previous_options(self):
-        captured = self._stub_proposals(
-            [("A {MAPA|FF7A00}", "B {NUEVO|8B3DFF}"),
-             ("C {MODO|FF39D7}", "D {CAMBIO|42E8FF}"),
-             ("E {NOVEDAD|FFD166}", "F {FECHA|B84DFF}")]
-        )
-        previous = [{"top": "ANTERIOR", "bottom": "NO ME GUSTA"}]
-        self.service.propose_tweet(
-            self.tweet_id,
-            provider="codex",
-            instructions="genera otras",
-            previous_options=previous,
-        )
-        self.assertEqual(captured["tweet"]["instructions"], "genera otras")
-        self.assertEqual(captured["tweet"]["previous_options"], previous)
+    def test_thumbnails_ask_the_cdn_for_a_small_version(self):
+        """Una miniatura de 108 px no debe pedir el archivo original."""
+        thumb = self._una(self.tweet_id)["thumbs"][0]
+        self.assertIn("name=360x360", thumb)
 
-    def _stub_propose_sequence(self, lotes):
-        """Devuelve un lote distinto en cada llamada y captura lo recibido."""
-        llamadas: list[dict] = []
 
-        def fake_propose(tweet, preferred=None):
-            llamadas.append(dict(tweet))
-            lote = lotes[min(len(llamadas) - 1, len(lotes) - 1)]
-            return {
-                "options": [
-                    {
-                        "top": top,
-                        "bottom": bottom,
-                        "caption": "caption",
-                        "hashtags": ["#khetzalgg"],
-                        "suggested_format": "9:16",
-                        "reasoning": "stub",
-                        "provider": "stub",
-                    }
-                    for top, bottom in lote
-                ],
-                "caption": "caption",
-                "hashtags": ["#khetzalgg"],
-                "suggested_format": "9:16",
-                "reasoning": "stub",
-                "provider": "stub",
-            }
-
-        original = analysis_providers.propose_tweet
-        analysis_providers.propose_tweet = fake_propose
-        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
-        return llamadas
-
-    def test_proposals_that_do_not_fit_are_discarded_and_regenerated(self):
-        """Una opción que no cabe en la tarjeta no llega a ofrecerse.
-
-        Se dio en real: se eligió una propuesta de 90 caracteres y la
-        composición falló después, con el usuario ya esperando la imagen.
-        """
-        largas = [
-            ("TITULAR UNO", "Su llegada está confirmada en v42.30, aunque la obtención permanece sin identificar."),
-            ("TITULAR DOS", "Este otro contexto también es demasiado largo para caber en la tarjeta vertical."),
-            ("TITULAR TRES", "Y este tercero igual de largo, con muchas palabras que no entran de ninguna manera."),
-        ]
-        cortas = [("CORTA A", "CONTEXTO A"), ("CORTA B", "CONTEXTO B"), ("CORTA C", "CONTEXTO C")]
-        llamadas = self._stub_propose_sequence([largas, cortas])
-
-        result = self.service.propose_tweet(self.tweet_id, provider="codex")
-
-        # El primer trío no cabía: se pidió otro antes de mostrar nada.
-        self.assertEqual(len(llamadas), 2)
-        self.assertEqual(result["discarded"], 3)
-        self.assertEqual(len(result["options"]), 3)
-        # El texto puede llevar ya el marcado de color: la regla dice que
-        # colorear no es opcional y estos pares de prueba llegan en plano.
-        self.assertIn("CORTA", result["options"][0]["top"])
-        # Y la segunda petición llevaba la instrucción de acortar.
-        self.assertIn("no cabía", llamadas[1]["instructions"])
-
-    def test_a_single_fitting_proposal_is_still_offered(self):
-        """Si solo cabe una, se ofrece una: nunca una que falle al componer."""
-        llamadas = self._stub_propose_sequence(
-            [[
-                ("CABE A", "CORTO A"),
-                ("NO CABE", "Un contexto larguisimo que no va a caber jamas en la tarjeta vertical de nueve dieciseis."),
-                ("NO CABE B", "Otro contexto igualmente larguisimo que tampoco entra en la tarjeta nunca jamas."),
-            ]]
-        )
-        result = self.service.propose_tweet(self.tweet_id, provider="codex")
-        self.assertEqual(len(result["options"]), 1)
-        self.assertIn("CABE", result["options"][0]["top"])
-        # Se intentó una segunda vez para completar el trío, sin conseguirlo.
-        self.assertEqual(len(llamadas), 2)
-
-    def test_the_real_failure_is_now_caught_before_composing(self):
-        """El texto que falló de verdad se detecta y no se ofrece."""
-        llamadas = self._stub_propose_sequence(
-            [[
-                ("CRYSTALLIZED {PUNISHER|8B3DFF}: UN PICO SIN RUTA REVELADA",
-                 "Su llegada está confirmada en v42.30, aunque la {OBTENCIÓN|FF7A00} permanece sin identificar."),
-                ("OTRO TITULAR {MAPA|FF7A00}", "CONTEXTO CORTO"),
-                ("TERCER TITULAR {MODO|FF39D7}", "OTRO CONTEXTO"),
-            ]]
-        )
-        result = self.service.propose_tweet(self.tweet_id, provider="codex")
-        self.assertEqual(result["discarded"], 1)
-        self.assertEqual(len(result["options"]), 2)
-        for opcion in result["options"]:
-            self.assertNotIn("Su llegada está confirmada", opcion["bottom"])
-        self.assertEqual(len(llamadas), 2)
-
-    def test_process_reanalyses_when_the_stored_analysis_was_a_fallback(self):
-        """Lo pedido: al procesar debe analizar ChatGPT, no reusar el relleno."""
-        self.service.store.update_tweet(
-            self.tweet_id,
-            analysis_json={
-                "top": "RELLENO",
-                "bottom": "RELLENO",
-                "hashtags": ["#khetzalgg"],
-                "provider": "manual",
-            },
-            status="analizado",
-        )
-        self._use_provider("chatgpt")
-        captured = self._stub_analysis("NUEVO {TITULAR|FF7A00}", "NUEVO CONTEXTO")
-
-        result = self.service.process_tweet(
-            self.tweet_id, {"resolution": "native", "backend": "cpu"}
-        )
-
-        self.assertIn("análisis de texto", result["steps"])
-        self.assertIn("descarga de medios y composición", result["steps"])
-        self.assertEqual(captured["tweet"]["tweet_id"], self.tweet_id)
-        self.assertEqual(result["card"]["params"]["top"], "NUEVO {TITULAR|FF7A00}")
-
-    def test_process_does_not_repeat_an_analysis_from_the_active_provider(self):
-        """Evita repetir un análisis lento (el de ChatGPT tarda ~1 minuto)."""
-        self.service.store.update_tweet(
-            self.tweet_id,
-            analysis_json={
-                "top": "YA HECHO",
-                "bottom": "YA HECHO",
-                "hashtags": ["#khetzalgg"],
-                "provider": "chatgpt",
-            },
-            status="analizado",
-        )
-        self._use_provider("chatgpt")
-
-        def explode(*args, **kwargs):
-            raise AssertionError("no debería volver a analizar")
-
-        analysis_providers.analyse_tweet = explode
-        self.addCleanup(setattr, analysis_providers, "analyse_tweet", original_analyse)
-
-        result = self.service.process_tweet(
-            self.tweet_id, {"resolution": "native", "backend": "cpu"}
-        )
-        self.assertIn("análisis ya existente", result["steps"])
-        self.assertEqual(result["card"]["params"]["top"], "YA HECHO")
-
-    def test_force_analysis_overrides_the_cached_one(self):
-        self.service.store.update_tweet(
-            self.tweet_id,
-            analysis_json={"top": "VIEJO", "bottom": "VIEJO", "provider": "chatgpt"},
-            status="analizado",
-        )
-        self._use_provider("chatgpt")
-        self._stub_analysis("OTRA VEZ", "OTRA VEZ B")
-        result = self.service.process_tweet(
-            self.tweet_id, {"resolution": "native", "backend": "cpu"}, force_analysis=True
-        )
-        self.assertIn("análisis de texto", result["steps"])
-        self.assertEqual(result["card"]["params"]["top"], "OTRA VEZ")
-
-    def test_test_analysis_does_not_save_or_touch_the_card(self):
-        result = self.service.test_analysis(self.tweet_id, provider="manual")
-        self.assertFalse(result["saved"])
-        self.assertTrue(result["analysis"]["top"])
-        # No se guardó análisis ni se creó tarjeta.
-        self.assertIsNone(self.service.get_tweet(self.tweet_id)["analysis"])
-        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
-
-    def test_test_analysis_reports_provider_failures(self):
-        def explode(*args, **kwargs):
-            raise analysis_providers.ProviderError("falta iniciar sesión en ChatGPT")
-
-        analysis_providers.analyse_tweet = explode
-        self.addCleanup(setattr, analysis_providers, "analyse_tweet", original_analyse)
-
-        with self.assertRaises(DashboardError) as context:
-            self.service.test_analysis(self.tweet_id, provider="chatgpt")
-        self.assertIn("iniciar sesión", str(context.exception))
-
-    def test_analysis_status_exposes_the_chatgpt_profile(self):
-        status = self.service.analysis_status()
-        self.assertIn("chatgpt", status["chatgpt_profile"])
-        self.assertIn(status["chatgpt_logged_in"], (True, False, None))
-        self.assertIn("codex_auth_mode", status)
-        names = {provider["name"] for provider in status["providers"]}
-        self.assertEqual(names, {"codex", "openai", "chatgpt", "manual"})
-
-    # --- regenerar solo el texto --------------------------------------
-    def _stub_analysis(self, top, bottom, caption="", hashtags=None):
-        """Sustituye el proveedor de análisis y captura lo que recibe."""
-        captured = {}
-
-        def fake_analyse(tweet, preferred=None):
-            captured["tweet"] = dict(tweet)
-            return {
-                "top": top,
-                "bottom": bottom,
-                "caption": caption,
-                "hashtags": hashtags or ["#khetzalgg"],
-                "suggested_format": "9:16",
-                "suggested_style": None,
-                "reasoning": "stub",
-                "provider": "stub",
-            }
-
-        analysis_providers.analyse_tweet = fake_analyse
-        self.addCleanup(setattr, analysis_providers, "analyse_tweet", original_analyse)
-        return captured
-
-    def test_regenerate_text_changes_only_the_text_and_keeps_everything_else(self):
-        card = self.service.prepare_card(
-            self.tweet_id,
-            {"top": "VIEJO TITULAR", "bottom": "VIEJO CONTEXTO", "caption": "viejo",
-             "format": "1:1", "fit": "contain", "resolution": "native", "backend": "cpu"},
-        )
-        media_before = sorted(p.name for p in self.service.media_directory(self.tweet_id).glob("*"))
-
-        captured = self._stub_analysis("NUEVO {TITULAR|8B3DFF}", "NUEVO CONTEXTO · 01/10", "nuevo caption")
-        result = self.service.regenerate_text(card["id"], render=False)
-
-        params = result["card"]["params"]
-        self.assertEqual(params["top"], "NUEVO {TITULAR|8B3DFF}")
-        self.assertEqual(params["bottom"], "NUEVO CONTEXTO · 01/10")
-        self.assertIn("nuevo caption", params["caption"])
-        # Nada más cambia: ajustes de composición y medios intactos.
-        self.assertEqual(params["format"], "1:1")
-        self.assertEqual(params["fit"], "contain")
-        self.assertEqual(params["resolution"], "native")
-        self.assertEqual(params["backend"], "cpu")
-        self.assertEqual(
-            sorted(p.name for p in self.service.media_directory(self.tweet_id).glob("*")),
-            media_before,
-        )
-        self.assertFalse(result["rendered"])
-        self.assertTrue(result["text_only"])
-        _ = captured
-
-    def test_regenerate_text_sends_the_previous_version_and_the_instruction(self):
-        card = self.service.prepare_card(
-            self.tweet_id,
-            {"top": "VIEJO TITULAR", "bottom": "VIEJO CONTEXTO", "caption": "viejo caption",
-             "resolution": "native", "backend": "cpu"},
-        )
-        captured = self._stub_analysis("OTRO TITULAR", "OTRO CONTEXTO", "otro caption")
-        self.service.regenerate_text(card["id"], instructions="más corto", render=False)
-
-        sent = captured["tweet"]
-        self.assertEqual(sent["previous"]["top"], "VIEJO TITULAR")
-        self.assertEqual(sent["previous"]["bottom"], "VIEJO CONTEXTO")
-        self.assertEqual(sent["instructions"], "más corto")
-
-    def test_regenerate_text_recomposes_when_asked(self):
-        card = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        self._stub_analysis("TITULAR NUEVO", "CONTEXTO NUEVO", "caption nuevo")
-        result = self.service.regenerate_text(card["id"], render=True)
-        self.assertTrue(result["rendered"])
-        self.assertTrue(Path(result["card"]["output_path"]).is_file())
-        self.assertTrue(result["card"]["meta"]["verification"]["ok"])
-
-    def test_regenerate_text_never_touches_the_tweet_text(self):
-        """El texto original de la publicación es la fuente y no se reescribe."""
-        before = self.service.get_tweet(self.tweet_id)["text"]
-        card = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        self._stub_analysis("TITULAR NUEVO", "CONTEXTO NUEVO", "caption nuevo")
-        self.service.regenerate_text(card["id"], render=False)
-        self.assertEqual(self.service.get_tweet(self.tweet_id)["text"], before)
-
-    def test_regenerate_missing_card_is_reported(self):
-        with self.assertRaises(DashboardError):
-            self.service.regenerate_text(999999)
 
     # --- fechas en las publicaciones -----------------------------------
     def test_listed_tweets_carry_relative_and_absolute_dates(self):
@@ -589,18 +150,6 @@ class DashboardIntegrationTests(unittest.TestCase):
         # Y la fecha de respaldo, para las publicaciones sin hora de origen.
         self.assertIn("fetched_at", tweet)
 
-    def test_listed_tweets_expose_the_editor_link_once_processed(self):
-        without = self.service.list_tweets(limit=5)[0]
-        self.assertFalse(without["has_card"])
-        self.assertIsNone(without["card_id"])
-
-        card = self.service.prepare_card(
-            self.tweet_id, {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}
-        )
-        with_card = self.service.list_tweets(limit=5)[0]
-        self.assertTrue(with_card["has_card"])
-        self.assertEqual(with_card["card_id"], card["id"])
-        self.assertEqual(with_card["editor_url"], f"/editor.html?card={card['id']}")
 
     def test_tweets_come_back_strictly_from_newest_to_oldest(self):
         """El orden es el contrato principal de la bandeja."""
@@ -652,21 +201,14 @@ class DashboardHttpTests(unittest.TestCase):
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
-            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "PROFILES_DIR", "LOGS_DIR")
         }
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
-
-        # Nunca se invoca al CLI de Codex real desde los tests.
-        key = "DASHBOARD_ANALYSIS_PROVIDER"
-        self._provider_before = os.environ.get(key)
-        os.environ[key] = "manual"
-        self.addCleanup(self._restore_provider, key)
 
         self.service = DashboardService(store=Store(config.DB_PATH))
         self.tweet_id = "1234567890"
@@ -681,9 +223,7 @@ class DashboardHttpTests(unittest.TestCase):
                 }
             ]
         )
-        media_dir = self.service.media_directory(self.tweet_id)
-        media_dir.mkdir(parents=True, exist_ok=True)
-        Image.new("RGB", (400, 400), (120, 40, 160)).save(media_dir / "01.png")
+        self.service.store.add_account("Cuenta")
 
         self.server, _, self.poller = create_server(
             host="127.0.0.1", port=0, service=self.service, poller=Poller(self.service)
@@ -696,19 +236,13 @@ class DashboardHttpTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
-        # Los hilos de la cola de trabajos deben parar antes de borrar el
-        # directorio temporal: si no, siguen usando la base de datos.
+        # El sondeador tiene su propio hilo: debe parar antes de borrar el
+        # directorio temporal, o seguiría usando la base de datos.
         self.poller.stop()
         self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
         self._temporary.cleanup()
-
-    def _restore_provider(self, key):
-        if self._provider_before is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = self._provider_before
 
     def call_raw(self, method, path, body=None):
         """Como `call`, pero devuelve también las cabeceras de la respuesta."""
@@ -736,44 +270,21 @@ class DashboardHttpTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
-    def _stub_proposals(self, options):
-        original = analysis_providers.propose_tweet
-
-        def fake_propose(tweet, preferred=None):
-            return {
-                "options": [
-                    {
-                        "top": top,
-                        "bottom": bottom,
-                        "caption": "caption",
-                        "hashtags": ["#khetzalgg"],
-                        "suggested_format": "9:16",
-                        "reasoning": "stub",
-                        "provider": "stub",
-                    }
-                    for top, bottom in options
-                ],
-                "caption": "caption",
-                "hashtags": ["#khetzalgg"],
-                "suggested_format": "9:16",
-                "reasoning": "stub",
-                "provider": "stub",
-            }
-
-        analysis_providers.propose_tweet = fake_propose
-        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
 
     # ------------------------------------------------------------------
     def test_index_and_static_assets_are_served(self):
         status, index = self.call("GET", "/", raw=True)
         self.assertEqual(status, 200)
         self.assertIn(b"<html", index.lower())
-        self.assertIn(b"EditImg Dashboard", index)
-        self.assertIn("Generar otras 3 opciones".encode("utf-8"), index)
-        self.assertIn(b"proposal-options", index)
+        # Las tres pestañas del visor, y ni rastro del editor retirado.
+        for marca in ("Bandeja", "Cuentas", "Ajustes"):
+            with self.subTest(marca=marca):
+                self.assertIn(marca.encode("utf-8"), index)
+        self.assertNotIn(b"editor", index.lower())
+        self.assertNotIn("proposal".encode("utf-8"), index.lower())
 
         for path, marker in (
-            ("/static/app.js", b"EditImg Dashboard"),
+            ("/static/app.js", b"Copiar enlace"),
             ("/static/styles.css", b"--purple"),
         ):
             with self.subTest(path=path):
@@ -788,9 +299,11 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("poller", state)
         names = {provider["name"] for provider in state["timeline_providers"]}
         self.assertEqual(names, {"browser", "nitter", "xapi"})
+        # Ya no hay proveedores de análisis ni de entrega: se fueron con el editor.
+        self.assertNotIn("analysis_providers", state)
+        self.assertNotIn("delivery_providers", state)
         # No se filtran credenciales, solo indicadores booleanos.
-        self.assertNotIn("openai_api_key", state["settings"])
-        self.assertIn("openai_api_key_set", state["settings"])
+        self.assertIn("access_token_set", state["settings"])
 
     def test_account_lifecycle_over_http(self):
         status, _ = self.call("POST", "/api/accounts", {"handle": "@Nueva"})
@@ -806,150 +319,58 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("no existe", payload["error"])
 
-    def test_full_offline_flow_over_http(self):
-        status, payload = self.call("GET", f"/api/tweets?status=todos&limit=10")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(payload["tweets"]), 1)
-
-        status, analyzed = self.call(
-            "POST", f"/api/tweets/{self.tweet_id}/analyze", {"provider": "manual"}
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(analyzed["tweet"]["status"], "analizado")
-
-        params = {**analyzed["defaults"], "resolution": "native", "backend": "cpu"}
-        params["top"] = "NOVEDAD {FORTNITE|8B3DFF}"
-        status, created = self.call(
-            "POST", f"/api/tweets/{self.tweet_id}/card", {"params": params}
-        )
-        self.assertEqual(status, 201)
-        card_id = created["card"]["id"]
-        self.assertTrue(created["card"]["meta"]["verification"]["ok"])
-
-        # Sin pedir nada se sirve la reducida (ligera, para listas); el PNG
-        # original se pide explícitamente con size=full.
-        status, image = self.call("GET", f"/api/cards/{card_id}/image?size=full", raw=True)
-        self.assertEqual(status, 200)
-        self.assertTrue(image.startswith(b"\x89PNG"))
-
-        status, reducida = self.call("GET", f"/api/cards/{card_id}/image", raw=True)
-        self.assertEqual(status, 200)
-        self.assertTrue(reducida.startswith(b"\xff\xd8"), "la vista previa es JPEG")
-        self.assertLess(len(reducida), len(image))
-
-        status, sent = self.call(
-            "POST", f"/api/cards/{card_id}/send", {"provider": "local", "caption": "hola", "sync": True}
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(sent["delivery"]["ok"])
-
-        status, deliveries = self.call("GET", f"/api/cards/{card_id}/deliveries")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(deliveries["deliveries"]), 1)
 
     def test_invalid_requests_are_rejected_cleanly(self):
         status, payload = self.call("GET", "/api/no-existe")
         self.assertEqual(status, 404)
         self.assertIn("error", payload)
 
-        status, payload = self.call("POST", "/api/tweets/999999/analyze", {"provider": "manual"})
+        status, payload = self.call("POST", "/api/tweets/999999/ready", {"ready": True})
         self.assertEqual(status, 400)
         self.assertIn("no existe", payload["error"])
 
-        status, payload = self.call(
-            "POST", f"/api/cards/424242/render", {"params": {"top": "A", "bottom": "B"}}
-        )
+        status, payload = self.call("POST", "/api/accounts", {"handle": "   "})
         self.assertEqual(status, 400)
+
+    def test_retired_routes_are_gone(self):
+        """Lo del editor se retiró de verdad, no solo de la interfaz."""
+        for ruta in (
+            "/api/cards",
+            "/api/cards/1/image",
+            "/api/jobs",
+            "/api/analysis/status",
+            "/api/deliveries",
+            "/editor.html",
+        ):
+            with self.subTest(ruta=ruta):
+                status, _ = self.call("GET", ruta)
+                self.assertEqual(status, 404, ruta)
 
     def test_path_traversal_is_blocked(self):
         status, payload = self.call("GET", "/static/../config.py")
         self.assertIn(status, (403, 404))
         self.assertIn("error", payload)
 
-    def test_editor_page_is_served_on_its_own_route(self):
-        for path in ("/editor", "/editor.html"):
-            with self.subTest(path=path):
-                status, body = self.call("GET", path, raw=True)
-                self.assertEqual(status, 200)
-                self.assertIn(b"Editor de tarjeta", body)
-                self.assertIn(b"Regenerar texto y caption", body)
-
-        status, body = self.call("GET", "/static/editor.js", raw=True)
-        self.assertEqual(status, 200)
-        self.assertIn(b"regenerate-text", body)
-
-    def test_process_endpoint_runs_the_whole_flow(self):
-        # `sync` fuerza el camino directo; el normal es en segundo plano.
-        status, result = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/process",
-            {"params": {"resolution": "native", "backend": "cpu"}, "sync": True},
-        )
-        self.assertEqual(status, 201)
-        self.assertTrue(result["card"]["meta"]["verification"]["ok"])
-        self.assertEqual(result["editor_url"], f"/editor.html?card={result['card']['id']}")
-        self.assertIn("descarga de medios y composición", result["steps"])
-
-        # Y la bandeja ya ofrece el botón de abrir el editor. Se pide
-        # `pending=0` porque por defecto lo ya procesado queda oculto.
-        status, listing = self.call("GET", f"/api/tweets?status=todos&limit=5&pending=0")
-        tweet = listing["tweets"][0]
-        self.assertTrue(tweet["has_card"])
-        self.assertEqual(tweet["card_id"], result["card"]["id"])
-        self.assertTrue(tweet["is_processed"])
-        self.assertTrue(tweet["posted_relative"])
-        self.assertTrue(tweet["posted_absolute"])
-
-    def test_process_endpoint_can_confirm_a_selected_proposal(self):
-        self._stub_proposals(
-            [("UNO {MAPA|FF7A00}", "CONTEXTO UNO {NUEVO|8B3DFF}"),
-             ("DOS {MODO|FF39D7}", "CONTEXTO DOS {CAMBIO|42E8FF}"),
-             ("TRES {NOVEDAD|FFD166}", "CONTEXTO TRES {FECHA|B84DFF}")]
-        )
-        status, proposals = self.call(
-            "POST", f"/api/tweets/{self.tweet_id}/proposals",
-            {"provider": "codex", "sync": True},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(len(proposals["options"]), 3)
-
-        status, result = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/process",
-            {
-                "provider": "codex",
-                "proposal": proposals["options"][1],
-                "params": {"resolution": "native", "backend": "cpu"},
-                "sync": True,
-            },
-        )
-        self.assertEqual(status, 201)
-        self.assertIn("par elegido", result["steps"])
-        self.assertTrue(result["card"]["params"]["top"].startswith("DOS {MODO|"))
-        self.assertTrue(result["card"]["params"]["bottom"].startswith("CONTEXTO DOS {CAMBIO|"))
-
-    def test_proposals_endpoint_is_queued_by_default(self):
-        self._stub_proposals(
-            [("UNO", "A"), ("DOS", "B"), ("TRES", "C")]
-        )
+    # --- marcar como listo --------------------------------------------
+    def test_the_ready_endpoint_marks_and_unmarks(self):
         status, payload = self.call(
-            "POST", f"/api/tweets/{self.tweet_id}/proposals", {"provider": "codex"}
+            "POST", f"/api/tweets/{self.tweet_id}/ready", {"ready": True}
         )
-        self.assertEqual(status, 202)
-        self.assertTrue(payload["queued"])
-        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
-        self.assertEqual(finished.state, "hecho", finished.detail)
-        self.assertEqual(len(finished.result["options"]), 3)
-        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["tweet"]["status"], STATUS_READY)
+
+        status, payload = self.call(
+            "POST", f"/api/tweets/{self.tweet_id}/ready", {"ready": False}
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["tweet"]["status"], STATUS_NEW)
 
     def test_processed_publications_leave_the_pending_view(self):
-        """Lo procesado deja de estorbar en la vista por defecto."""
-        status, _ = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/process",
-            {"params": {"resolution": "native", "backend": "cpu"}, "sync": True},
-        )
-        self.assertEqual(status, 201)
+        """Lo marcado como listo deja de estorbar en la vista por defecto."""
+        status, _ = self.call("POST", f"/api/tweets/{self.tweet_id}/ready", {"ready": True})
+        self.assertEqual(status, 200)
 
         status, pending = self.call("GET", "/api/tweets?status=todos&limit=10")
         self.assertEqual(pending["tweets"], [], "ya no debería aparecer como pendiente")
@@ -958,271 +379,28 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(len(everything["tweets"]), 1)
         self.assertTrue(everything["tweets"][0]["is_processed"])
 
-    def test_regenerate_text_endpoint_keeps_composition_settings(self):
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "format": "1:1", "resolution": "native",
-                        "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        card_id = created["card"]["id"]
+        # Y con el filtro de listas sí aparece: se puede desmarcar.
+        status, listas = self.call("GET", "/api/tweets?status=listo&pending=0&limit=10")
+        self.assertEqual(len(listas["tweets"]), 1)
+        self.assertEqual(listas["tweets"][0]["status"], STATUS_READY)
 
-        status, result = self.call(
-            "POST",
-            f"/api/cards/{card_id}/regenerate-text",
-            {"provider": "manual", "instructions": "más corto", "render": False, "sync": True},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(result["text_only"])
-        self.assertFalse(result["rendered"])
-        params = result["card"]["params"]
-        self.assertEqual(params["format"], "1:1")
-        self.assertEqual(params["resolution"], "native")
-        self.assertTrue(params["top"])
-        self.assertTrue(params["bottom"])
 
-    def test_regenerate_text_on_missing_card_is_rejected(self):
-        status, payload = self.call(
-            "POST", "/api/cards/987654/regenerate-text", {"provider": "manual", "sync": True}
-        )
-        self.assertEqual(status, 400)
-        self.assertIn("no existe", payload["error"])
+
 
     # --- vista de procesadas ------------------------------------------
-    def test_the_cards_view_lists_processed_cards(self):
-        """La vista que faltaba: ver lo ya procesado para enviarlo o editarlo."""
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "UN TITULAR", "bottom": "UN CONTEXTO",
-                        "resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        card_id = created["card"]["id"]
 
-        status, payload = self.call("GET", "/api/cards?limit=50")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(payload["cards"]), 1)
-        item = payload["cards"][0]
-        self.assertEqual(item["card"]["id"], card_id)
-        self.assertEqual(item["editor_url"], f"/editor.html?card={card_id}")
-        self.assertFalse(item["sent"])
-        self.assertIsNone(item["last_delivery"])
-        # Trae lo necesario para mostrarla sin más consultas.
-        self.assertEqual(item["tweet"]["author_handle"], "Cuenta")
-        self.assertIn("posted_relative", item["tweet"])
-        self.assertIn("thumbs", item["tweet"])
 
-    def test_the_cards_view_marks_what_was_already_sent(self):
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        card_id = created["card"]["id"]
-        status, _ = self.call(
-            "POST", f"/api/cards/{card_id}/send",
-            {"provider": "local", "caption": "hola", "sync": True},
-        )
-        self.assertEqual(status, 200)
 
-        status, payload = self.call("GET", "/api/cards?limit=50")
-        item = payload["cards"][0]
-        self.assertTrue(item["sent"])
-        self.assertEqual(item["last_delivery"]["status"], "ok")
 
-    def test_process_runs_in_the_background_by_default(self):
-        """La petición responde al instante y el trabajo sigue en el servidor."""
-        status, payload = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/process",
-            {"params": {"resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 202)
-        self.assertTrue(payload["queued"])
-        job_id = payload["job"]["id"]
-        self.assertIn(payload["job"]["state"], ("en_espera", "en_curso"))
 
-        deadline = time.time() + 150
-        state = None
-        while time.time() < deadline:
-            status, job = self.call("GET", f"/api/jobs/{job_id}")
-            self.assertEqual(status, 200)
-            state = job["job"]["state"]
-            if state in ("hecho", "fallido"):
-                break
-            time.sleep(1)
-        self.assertEqual(state, "hecho")
-        status, listing = self.call("GET", "/api/tweets?status=todos&limit=5&pending=0")
-        self.assertTrue(listing["tweets"][0]["has_card"])
 
-    def test_regenerate_and_send_are_queued_by_default(self):
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        card_id = created["card"]["id"]
 
-        status, payload = self.call(
-            "POST", f"/api/cards/{card_id}/regenerate-text", {"provider": "manual", "render": False}
-        )
-        self.assertEqual(status, 202)
-        self.assertTrue(payload["queued"])
-        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
-        self.assertEqual(finished.state, "hecho")
 
-        status, payload = self.call(
-            "POST", f"/api/cards/{card_id}/send", {"provider": "local"}
-        )
-        self.assertEqual(status, 202)
-        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
-        self.assertEqual(finished.state, "hecho")
 
-    def test_the_jobs_endpoint_reports_the_queue(self):
-        status, payload = self.call("GET", "/api/jobs")
-        self.assertEqual(status, 200)
-        for key in ("workers", "recent", "busy", "pending", "running"):
-            self.assertIn(key, payload)
 
-    def test_an_unknown_job_is_reported(self):
-        status, payload = self.call("GET", "/api/jobs/987654")
-        self.assertEqual(status, 400)
-        self.assertIn("no existe", payload["error"])
 
-    def test_a_card_can_be_recomposed_in_another_format(self):
-        """El botón que faltaba: corregir el formato de una tarjeta ya hecha."""
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "format": "16:9",
-                        "resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        card_id = created["card"]["id"]
-        self.assertEqual(
-            (created["card"]["meta"]["width"], created["card"]["meta"]["height"]),
-            (1920, 1080),
-        )
 
-        # Se cambia a vertical, que es lo que se publica.
-        status, payload = self.call(
-            "POST", f"/api/cards/{card_id}/render", {"params": {"format": "9:16"}}
-        )
-        self.assertEqual(status, 202)
-        self.assertTrue(payload["queued"])
-        self.assertIn("9:16", payload["job"]["label"])
-        finished = self.service.jobs.wait(payload["job"]["id"], timeout=180)
-        self.assertEqual(finished.state, "hecho", finished.detail)
-        # `render_card` devuelve la tarjeta ya recompuesta.
-        card = finished.result
-        self.assertEqual((card["meta"]["width"], card["meta"]["height"]), (1080, 1920))
-        self.assertEqual(card["params"]["format"], "9:16")
 
-    def test_recomposing_keeps_one_working_card_per_tweet(self):
-        """Cambiar el formato recompone, no acumula copias."""
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        card_id = created["card"]["id"]
-        for formato in ("1:1", "9:16"):
-            status, payload = self.call(
-                "POST", f"/api/cards/{card_id}/render",
-                {"params": {"format": formato}, "sync": True},
-            )
-            self.assertEqual(status, 200)
-        status, listing = self.call("GET", "/api/cards?limit=20")
-        self.assertEqual(len(listing["cards"]), 1, "debe seguir habiendo una sola tarjeta")
-
-    def test_the_interface_offers_a_format_button(self):
-        status, body = self.call("GET", "/static/app.js", raw=True)
-        self.assertIn(b"data-recompose", body)
-        self.assertIn(b"Cambiar formato", body)
-
-    def test_the_cards_tab_exists_in_the_interface(self):
-        status, body = self.call("GET", "/", raw=True)
-        self.assertIn(b'data-tab="cards"', body)
-        self.assertIn("Procesadas".encode(), body)
-
-    def test_the_list_serves_a_small_preview_not_the_full_png(self):
-        """Servir el PNG de 30 MB en una miniatura hundía el móvil."""
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        card_id = created["card"]["id"]
-
-        status, reducida, cabeceras = self.call_raw(
-            "GET", f"/api/cards/{card_id}/image?size=preview&w=720"
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(cabeceras.get("Content-Type"), "image/jpeg")
-        self.assertLess(len(reducida), 400_000, "la vista previa debería ser ligera")
-
-        status, completa, cabeceras = self.call_raw(
-            "GET", f"/api/cards/{card_id}/image?size=full"
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(cabeceras.get("Content-Type"), "image/png")
-        self.assertGreater(
-            len(completa), len(reducida), "la completa debe pesar más que la reducida"
-        )
-
-    def test_the_preview_is_the_default(self):
-        """Sin pedir nada se sirve la reducida, que es lo que usa la lista."""
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        card_id = created["card"]["id"]
-        status, _cuerpo, cabeceras = self.call_raw("GET", f"/api/cards/{card_id}/image")
-        self.assertEqual(status, 200)
-        self.assertEqual(cabeceras.get("Content-Type"), "image/jpeg")
-        self.assertIn("max-age", cabeceras.get("Cache-Control", ""))
-
-    def test_the_reduced_image_keeps_the_card_proportions(self):
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        meta = created["card"]["meta"]
-
-        import io
-
-        from PIL import Image
-
-        status, cuerpo, _ = self.call_raw(
-            "GET", f"/api/cards/{created['card']['id']}/image?size=preview&w=480"
-        )
-        self.assertEqual(status, 200)
-        with Image.open(io.BytesIO(cuerpo)) as imagen:
-            ancho, alto = imagen.size
-        self.assertEqual(max(ancho, alto), 480)
-        self.assertAlmostEqual(ancho / alto, meta["width"] / meta["height"], places=2)
-
-    def test_cards_have_one_file_per_tweet(self):
-        status, created = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        first_path = created["card"]["output_path"]
-        status, again = self.call(
-            "POST",
-            f"/api/tweets/{self.tweet_id}/card",
-            {"params": {"top": "C", "bottom": "D", "resolution": "native", "backend": "cpu"}},
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(again["card"]["id"], created["card"]["id"])
-        self.assertEqual(again["card"]["output_path"], first_path)
 
 
 class AccessControlTests(unittest.TestCase):
@@ -1233,12 +411,11 @@ class AccessControlTests(unittest.TestCase):
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
-            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "PROFILES_DIR", "LOGS_DIR")
         }
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()

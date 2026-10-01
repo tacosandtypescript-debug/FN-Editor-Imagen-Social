@@ -139,12 +139,11 @@ class PollerTests(unittest.TestCase):
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
-            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "PROFILES_DIR", "LOGS_DIR")
         }
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
@@ -335,12 +334,11 @@ class ServicePollTests(unittest.TestCase):
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
-            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "PROFILES_DIR", "LOGS_DIR")
         }
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()

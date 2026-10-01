@@ -1,15 +1,48 @@
-"""Descarga y sondeo de medios, delegando en `bin/fetch_media.py`."""
+"""Lectura de una publicación de X: texto, medios y fecha reales.
+
+Es lo único que el dashboard necesita del código canónico del repositorio. Se
+carga `bin/fetch_media.py` por ruta, **sin modificarlo ni copiarlo**: es el mismo
+mecanismo que usa `bin/edit_link.py` para importarlo, así que el comportamiento
+es el del flujo existente.
+
+Antes esto vivía repartido entre `pipeline/media.py`, `pipeline/repo.py` y el
+compositor, porque el dashboard también componía tarjetas. Ya no compone nada.
+"""
 
 from __future__ import annotations
 
+import importlib
 import json
-from pathlib import Path
+import sys
+import threading
 from urllib.error import HTTPError, URLError
 
-from . import repo
+from . import config
+
+_LOCK = threading.Lock()
+_CACHE: dict[str, object] = {}
 
 #: Claves donde los mirrors públicos exponen la fecha de publicación.
 _DATE_KEYS = ("created_at", "date", "createdAt", "tweet_created_at", "published_at")
+
+#: Mirrors que devuelven el JSON del post sin necesidad de credenciales.
+API_HOSTS = ("api.vxtwitter.com", "api.fxtwitter.com")
+
+
+def fetch_media():
+    """`bin/fetch_media.py`, cargado una sola vez."""
+    cached = _CACHE.get("fetch_media")
+    if cached is not None:
+        return cached
+    with _LOCK:
+        cached = _CACHE.get("fetch_media")
+        if cached is None:
+            bin_dir = str(config.BIN_DIR)
+            if bin_dir not in sys.path:
+                sys.path.insert(0, bin_dir)
+            cached = importlib.import_module("fetch_media")
+            _CACHE["fetch_media"] = cached
+    return cached
 
 
 def _find_date(payload) -> str | None:
@@ -32,33 +65,33 @@ def _find_date(payload) -> str | None:
 
 
 def probe_post(url: str) -> dict:
-    """Devuelve medios ordenados y texto de un post sin descargarlos.
+    """Devuelve texto, medios ordenados y fecha de un post sin descargarlos.
 
     Reutiliza `parse_x_status_url`, `request_bytes`, `extract_media_urls` y
-    `extract_post_text` del módulo canónico y añade la fecha, que ese módulo
-    no expone.
+    `extract_post_text` del módulo canónico, y añade la fecha, que ese módulo no
+    expone.
 
     Lanza `ValueError`/`RuntimeError` con el motivo si el post no sirve.
     """
-    fm = repo.fetch_media()
-    post = fm.parse_x_status_url(url)
+    module = fetch_media()
+    post = module.parse_x_status_url(url)
     if not post:
         raise ValueError("el enlace no apunta a un post de X")
     username, status_id = post
 
     errors: list[str] = []
     media_without_text: dict | None = None
-    for api_host in ("api.vxtwitter.com", "api.fxtwitter.com"):
+    for api_host in API_HOSTS:
         api_url = f"https://{api_host}/{username}/status/{status_id}"
         try:
-            raw = fm.request_bytes(api_url, accept="application/json")
+            raw = module.request_bytes(api_url, accept="application/json")
             payload = json.loads(raw.decode("utf-8"))
         except (HTTPError, URLError, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"{api_host}: {exc}")
             continue
 
-        media_urls = fm.extract_media_urls(payload)
-        post_text = fm.extract_post_text(payload)
+        media_urls = module.extract_media_urls(payload)
+        post_text = module.extract_post_text(payload)
         posted_at = _find_date(payload)
         if media_urls:
             data = {
@@ -84,37 +117,3 @@ def probe_post(url: str) -> dict:
     if media_without_text:
         return media_without_text
     raise RuntimeError("no se pudo leer el post (" + "; ".join(errors) + ")")
-
-
-def download_media(url: str, destination: Path, max_images: int | None = None) -> dict:
-    """Descarga todos los medios del post en orden estable.
-
-    Delega por completo en `fetch_media.download_link_info`, así que los
-    límites de tamaño, la validación de imagen y el orden son los del flujo
-    actual.
-    """
-    fm = repo.fetch_media()
-    limit = default_limit(max_images)
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    return fm.download_link_info(url, destination, limit)
-
-
-def default_limit(max_images: int | None) -> int:
-    if isinstance(max_images, bool) or max_images is None:
-        return repo.default_max_images()
-    value = int(max_images)
-    if value <= 0:
-        raise ValueError("max_images debe ser mayor que cero")
-    return value
-
-
-def image_sizes(paths) -> list[tuple[int, int]]:
-    """Dimensiones reales de una lista de archivos, para elegir el preset."""
-    from PIL import Image
-
-    sizes: list[tuple[int, int]] = []
-    for path in paths:
-        with Image.open(path) as image:
-            sizes.append(image.size)
-    return sizes

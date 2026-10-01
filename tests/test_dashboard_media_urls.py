@@ -101,12 +101,11 @@ class SelectiveEnrichmentTests(unittest.TestCase):
         work = Path(self._temporary.name)
         self._originals = {
             name: getattr(config, name)
-            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "PROFILES_DIR", "LOGS_DIR")
         }
         config.VAR_DIR = work
         config.DB_PATH = work / "dashboard.sqlite3"
         config.MEDIA_DIR = work / "media"
-        config.CARDS_DIR = work / "cards"
         config.PROFILES_DIR = work / "profiles"
         config.LOGS_DIR = work / "logs"
         config.ensure_directories()
@@ -223,124 +222,6 @@ class SelectiveEnrichmentTests(unittest.TestCase):
         self.service._record_success("cuenta", tweets, "nitter")
         stored = self.service.get_tweet("dos")
         self.assertEqual(stored["thumbs"], ["https://example.com/a.jpg"])
-
-
-class ChosenFormatTests(unittest.TestCase):
-    """El formato elegido debe mandar sobre la sugerencia de la IA.
-
-    Fallo real: el formato lo imponía la IA para cada publicación, así que unas
-    tarjetas salían verticales, otras cuadradas y otras horizontales. El usuario
-    pidió verticales y recibió una mezcla.
-    """
-
-    def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.work = Path(self._temporary.name)
-        self._originals = {
-            n: getattr(config, n) for n in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR")
-        }
-        config.VAR_DIR = self.work
-        config.DB_PATH = self.work / "dashboard.sqlite3"
-        config.MEDIA_DIR = self.work / "media"
-        config.CARDS_DIR = self.work / "cards"
-        config.ensure_directories()
-        self._env = {}
-        self.service = DashboardService(store=Store(config.DB_PATH))
-        self.service.store.upsert_tweets(
-            [
-                {
-                    "tweet_id": "1",
-                    "source_handle": "Cuenta",
-                    "text": "NOVEDAD",
-                    "media": ["https://pbs.twimg.com/media/A.jpg"],
-                }
-            ]
-        )
-        # Análisis guardado que propone cuadrado, como haría la IA.
-        self.service.store.update_tweet(
-            "1",
-            analysis_json={
-                "provider": "manual",
-                "top": "UN TITULAR",
-                "bottom": "UN CONTEXTO",
-                "suggested_format": "1:1",
-            },
-        )
-
-    def tearDown(self):
-        self.service.shutdown()
-        for name, value in self._originals.items():
-            setattr(config, name, value)
-        for key, value in self._env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        self._temporary.cleanup()
-
-    def _with_default_format(self, value):
-        key = "DASHBOARD_DEFAULT_FORMAT"
-        self._env.setdefault(key, os.environ.get(key))
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-
-    def test_vertical_is_the_default(self):
-        self._with_default_format(None)
-        params = self.service.default_params("1")
-        self.assertEqual(params["format"], "9:16")
-        self.assertTrue(params["format_is_forced"])
-
-    def test_the_chosen_format_beats_the_ai_suggestion(self):
-        self._with_default_format("9:16")
-        params = self.service.default_params("1")
-        self.assertEqual(params["format"], "9:16")
-        # La sugerencia se conserva para poder avisar, pero no se usa.
-        self.assertEqual(params["suggested_format"], "1:1")
-        self.assertTrue(params["format_is_forced"])
-
-    def test_another_chosen_format_is_also_respected(self):
-        self._with_default_format("16:9")
-        self.assertEqual(self.service.default_params("1")["format"], "16:9")
-
-    def test_auto_does_let_the_ai_decide(self):
-        self._with_default_format("auto")
-        params = self.service.default_params("1")
-        self.assertEqual(params["format"], "1:1")
-        self.assertFalse(params["format_is_forced"])
-
-    def test_the_preset_for_vertical_is_the_vertical_one(self):
-        # `vertical` no es una clave del mapa y cae al preset por defecto, que
-        # es precisamente el vertical; se comprueba que siguen coincidiendo.
-        self.assertEqual(
-            config.preset_for_format("9:16"), config.preset_for_format("vertical")
-        )
-        self.assertNotEqual(
-            config.preset_for_format("9:16"), config.preset_for_format("1:1")
-        )
-        self.assertNotEqual(
-            config.preset_for_format("9:16"), config.preset_for_format("16:9")
-        )
-
-    def test_every_offered_format_has_a_real_preset(self):
-        """El selector no debe ofrecer formatos que no existen.
-
-        Ofrecía 4:5, que no tiene preset propio: al elegirlo se componía en
-        9:16 sin avisar, así que la interfaz prometía algo que no cumplía.
-        """
-        from dashboard.pipeline.cards import ALLOWED_FORMATS
-
-        for output_format in ALLOWED_FORMATS:
-            if output_format == "auto":
-                continue
-            with self.subTest(formato=output_format):
-                self.assertIn(
-                    output_format,
-                    config.PRESETS,
-                    f"el formato {output_format} se ofrece pero no tiene preset",
-                )
-                self.assertTrue(config.preset_for_format(output_format).is_file())
 
 
 

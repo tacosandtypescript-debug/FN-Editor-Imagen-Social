@@ -1,5 +1,9 @@
-"""Proveedores intercambiables del dashboard."""
+"""Proveedores intercambiables del dashboard.
 
-from . import analysis, base, telegram, timelines
+Solo queda el descubrimiento de publicaciones. El análisis editorial y la
+entrega se quitaron con el editor: este dashboard es un visor.
+"""
 
-__all__ = ["analysis", "base", "telegram", "timelines"]
+from . import base, timelines
+
+__all__ = ["base", "timelines"]

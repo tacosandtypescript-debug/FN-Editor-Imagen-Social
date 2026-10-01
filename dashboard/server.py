@@ -17,19 +17,16 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from . import config
-from . import previews
 from .poller import Poller
 from .service import DashboardError, DashboardService
 
 #: Rutas de la API. El orden importa: la primera coincidencia gana.
+#:
+#: El dashboard es un visor: descubrir, mirar y marcar. Todo lo que había para
+#: analizar, componer tarjetas y entregarlas se quitó con el editor.
 ROUTES = (
     ("GET", re.compile(r"^/api/state$"), "get_state"),
     ("GET", re.compile(r"^/api/events$"), "get_events"),
-    ("GET", re.compile(r"^/api/analysis/status$"), "get_analysis_status"),
-    ("GET", re.compile(r"^/api/jobs$"), "get_jobs"),
-    ("GET", re.compile(r"^/api/jobs/(\d+)$"), "get_job"),
-    ("POST", re.compile(r"^/api/analysis/test$"), "post_analysis_test"),
-    ("POST", re.compile(r"^/api/profiles/chatgpt/open$"), "post_chatgpt_login"),
     ("GET", re.compile(r"^/api/accounts$"), "get_accounts"),
     ("POST", re.compile(r"^/api/accounts$"), "post_account"),
     ("POST", re.compile(r"^/api/accounts/([^/]+)/active$"), "post_account_active"),
@@ -40,18 +37,7 @@ ROUTES = (
     ("GET", re.compile(r"^/api/tweets$"), "get_tweets"),
     ("GET", re.compile(r"^/api/tweets/(\d+)$"), "get_tweet"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/status$"), "post_tweet_status"),
-    ("POST", re.compile(r"^/api/tweets/(\d+)/analyze$"), "post_tweet_analyze"),
-    ("POST", re.compile(r"^/api/tweets/(\d+)/proposals$"), "post_tweet_proposals"),
-    ("POST", re.compile(r"^/api/tweets/(\d+)/process$"), "post_tweet_process"),
-    ("POST", re.compile(r"^/api/tweets/(\d+)/card$"), "post_tweet_card"),
-    ("GET", re.compile(r"^/api/cards$"), "get_cards"),
-    ("GET", re.compile(r"^/api/cards/(\d+)$"), "get_card"),
-    ("POST", re.compile(r"^/api/cards/(\d+)/render$"), "post_card_render"),
-    ("POST", re.compile(r"^/api/cards/(\d+)/regenerate-text$"), "post_card_regenerate_text"),
-    ("POST", re.compile(r"^/api/cards/(\d+)/send$"), "post_card_send"),
-    ("GET", re.compile(r"^/api/cards/(\d+)/image$"), "get_card_image"),
-    ("GET", re.compile(r"^/api/cards/(\d+)/deliveries$"), "get_card_deliveries"),
-    ("GET", re.compile(r"^/api/deliveries$"), "get_deliveries"),
+    ("POST", re.compile(r"^/api/tweets/(\d+)/ready$"), "post_tweet_ready"),
 )
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -220,10 +206,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path in {"/", "/index.html"}:
             self._serve_file(config.WEB_DIR / "index.html")
             return
-        if path in {"/editor", "/editor.html"}:
-            # Editor independiente: se abre en su propia pestaña.
-            self._serve_file(config.WEB_DIR / "editor.html")
-            return
         if path.startswith("/static/"):
             self._serve_file(config.WEB_DIR / path[len("/static/") :])
             return
@@ -266,21 +248,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def get_events(self, query, *groups) -> None:
         limit = _int_param(query, "limit", 60)
         self._send_json({"events": self.service.events(limit)})
-
-    def get_analysis_status(self, query, *groups) -> None:
-        self._send_json(self.service.analysis_status())
-
-    def post_analysis_test(self, query, *groups) -> None:
-        """Prueba el proveedor de análisis sin guardar nada."""
-        payload = self._read_json()
-        tweet_id = str(payload.get("tweet_id") or "").strip()
-        if not tweet_id:
-            raise DashboardError("falta el identificador de la publicación")
-        self._send_json(self.service.test_analysis(tweet_id, payload.get("provider") or None))
-
-    def post_chatgpt_login(self, query, *groups) -> None:
-        """Abre la ventana de Chrome con el perfil de ChatGPT para entrar."""
-        self._send_json(self.service.open_chatgpt_login())
 
     def get_accounts(self, query, *groups) -> None:
         self._send_json({"accounts": self.service.store.list_accounts()})
@@ -346,179 +313,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def get_tweet(self, query, tweet_id: str) -> None:
-        tweet = self.service.get_tweet(tweet_id)
-        card = self.service.store.latest_card(tweet_id)
-        self._send_json(
-            {
-                "tweet": tweet,
-                "card": card,
-                "defaults": self.service.default_params(tweet_id),
-            }
-        )
+        self._send_json({"tweet": self.service.get_tweet(tweet_id)})
 
     def post_tweet_status(self, query, tweet_id: str) -> None:
         payload = self._read_json()
         tweet = self.service.set_tweet_status(tweet_id, str(payload.get("status") or ""))
         self._send_json({"tweet": tweet})
 
-    def post_tweet_analyze(self, query, tweet_id: str) -> None:
-        payload = self._read_json()
-        tweet = self.service.analyse(tweet_id, payload.get("provider") or None)
-        self._send_json({"tweet": tweet, "defaults": self.service.default_params(tweet_id)})
+    def post_tweet_ready(self, query, tweet_id: str) -> None:
+        """Marca o desmarca una publicación como lista.
 
-    def post_tweet_card(self, query, tweet_id: str) -> None:
-        payload = self._read_json()
-        card = self.service.prepare_card(tweet_id, payload.get("params") or {})
-        self._send_json({"card": card}, status=201)
-
-    def post_tweet_proposals(self, query, tweet_id: str) -> None:
-        """Genera tres propuestas JSON antes de descargar y componer."""
-        payload = self._read_json()
-        provider = payload.get("provider") or None
-        instructions = payload.get("instructions") or None
-        previous_options = payload.get("previous_options") or None
-        if payload.get("sync"):
-            self._send_json(
-                self.service.propose_tweet(
-                    tweet_id,
-                    provider=provider,
-                    instructions=instructions,
-                    previous_options=previous_options,
-                )
-            )
-            return
-        job = self.service.enqueue_proposals(
-            tweet_id,
-            provider=provider,
-            instructions=instructions,
-            previous_options=previous_options,
-        )
-        self._send_json({"job": job, "queued": True}, status=202)
-
-    def post_tweet_process(self, query, tweet_id: str) -> None:
-        """Confirma un par elegido y compone la tarjeta."""
-        payload = self._read_json()
-        params = payload.get("params") or None
-        provider = payload.get("provider") or None
-        proposal = payload.get("proposal") or payload.get("selection") or None
-        force = bool(payload.get("force_analysis"))
-        if payload.get("sync"):
-            self._send_json(
-                self.service.process_tweet(
-                    tweet_id, params, provider, force, proposal=proposal
-                ),
-                status=201,
-            )
-            return
-        job = self.service.enqueue_process(
-            tweet_id, params, provider, force, proposal=proposal
-        )
-        self._send_json({"job": job, "queued": True}, status=202)
-
-    def get_jobs(self, query, *groups) -> None:
-        self._send_json(self.service.jobs_state())
-
-    def get_job(self, query, job_id: str) -> None:
-        job = self.service.jobs.get(int(job_id))
-        if job is None:
-            raise DashboardError(f"no existe el trabajo {job_id}")
-        self._send_json({"job": job.as_dict(include_result=True)})
-
-    def post_card_regenerate_text(self, query, card_id: str) -> None:
-        """Regenera titular, texto inferior y caption.
-
-        Se encola: el análisis tarda unos treinta segundos y el navegador no
-        debe quedarse esperando. Con `sync` se fuerza el camino directo.
+        «Listo» es lo que la salva de la limpieza por retención: sin la marca,
+        lo anterior a 48 horas se borra.
         """
         payload = self._read_json()
-        if payload.get("sync"):
-            self._send_json(
-                self.service.regenerate_text(
-                    int(card_id),
-                    instructions=payload.get("instructions"),
-                    render=bool(payload.get("render", True)),
-                    provider=payload.get("provider") or None,
-                )
-            )
-            return
-        job = self.service.enqueue_regenerate(
-            int(card_id),
-            instructions=payload.get("instructions"),
-            provider=payload.get("provider") or None,
-            render=bool(payload.get("render", True)),
+        ready = bool(payload.get("ready", True))
+        tweet = (
+            self.service.mark_ready(tweet_id)
+            if ready
+            else self.service.unmark_ready(tweet_id)
         )
-        self._send_json({"job": job, "queued": True}, status=202)
-
-    def get_card(self, query, card_id: str) -> None:
-        self._send_json({"card": self.service.get_card(int(card_id))})
-
-    def get_cards(self, query, *groups) -> None:
-        """Listado de tarjetas creadas: la vista de «ya procesadas»."""
-        limit = _int_param(query, "limit", 200)
-        self._send_json({"cards": self.service.list_cards_view(limit)})
-
-    def post_card_render(self, query, card_id: str) -> None:
-        """Recompone una tarjeta. Es lo que permite cambiarle el formato.
-
-        Se encola por el mismo motivo que el resto: componer a resolución
-        nativa tarda y el navegador no debe quedarse esperando.
-        """
-        payload = self._read_json()
-        params = payload.get("params") or {}
-        if payload.get("sync"):
-            self._send_json({"card": self.service.render_card(int(card_id), params)})
-            return
-        job = self.service.enqueue_render(int(card_id), params)
-        self._send_json({"job": job, "queued": True}, status=202)
-
-    def post_card_send(self, query, card_id: str) -> None:
-        payload = self._read_json()
-        caption = payload.get("caption")
-        provider = payload.get("provider") or None
-        if payload.get("sync"):
-            self._send_json(
-                self.service.send_card(int(card_id), caption=caption, provider=provider)
-            )
-            return
-        job = self.service.enqueue_send(int(card_id), caption=caption, provider=provider)
-        self._send_json({"job": job, "queued": True}, status=202)
-
-    def get_card_image(self, query, card_id: str) -> None:
-        """Sirve la tarjeta.
-
-        Por defecto entrega la **versión reducida**: el PNG original ronda los
-        30 MB y en una lista de móvil eso es servir una imagen de 4000 px en un
-        hueco de 400 px. Con `size=full` se entrega el PNG original, que es lo
-        que se descarga y lo que se envía a Telegram.
-        """
-        path = self.service.card_image(int(card_id))
-        size = (_first(query, "size") or "preview").lower()
-        tipo = "image/png"
-        if size in ("preview", "thumb", "reduced"):
-            ancho = _int_param(query, "w", previews.PREVIEW_MAX_SIDE)
-            try:
-                path = previews.preview_path(path, max_side=ancho or previews.PREVIEW_MAX_SIDE)
-                tipo = "image/jpeg"
-            except Exception:  # noqa: BLE001 - ante cualquier fallo, el original
-                tipo = "image/png"
-        body = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", tipo)
-        self.send_header("Content-Length", str(len(body)))
-        # Las miniaturas llevan el sello del original en el nombre, así que se
-        # pueden cachear; el original no, porque se recompone a menudo.
-        self.send_header(
-            "Cache-Control",
-            "public, max-age=300" if tipo == "image/jpeg" else "no-store",
-        )
-        self.end_headers()
-        self.wfile.write(body)
-
-    def get_card_deliveries(self, query, card_id: str) -> None:
-        self._send_json({"deliveries": self.service.deliveries(int(card_id))})
-
-    def get_deliveries(self, query, *groups) -> None:
-        self._send_json({"deliveries": self.service.deliveries()})
+        self._send_json({"tweet": tweet, "ready": ready})
 
 
 # ----------------------------------------------------------------------
