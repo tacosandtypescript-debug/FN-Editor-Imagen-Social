@@ -1,32 +1,46 @@
 """Sondeo automático en segundo plano.
 
-Un hilo recorre las cuentas activas cada `poll_interval_seconds`. Se puede
-lanzar un sondeo manual desde la interfaz sin esperar al intervalo; ambos
-comparten un cerrojo para no solaparse.
+El hilo del sondeador **siempre** está activo, aunque se desactive el sondeo
+periódico. Es importante: el botón «Buscar ahora» pide un sondeo en segundo
+plano, y si el hilo no existiera esa petición se quedaría en nada —el aviso de
+«sondeo iniciado» aparecería sin que ocurriera nada, y el navegador nunca se
+abriría—. `periodic=False` solo significa «no sondees solo cada cierto
+tiempo»; los sondeos pedidos a mano siguen funcionando.
 """
 
 from __future__ import annotations
 
 import threading
-import time
 
 from . import config
 from .service import DashboardService
 
 
 class Poller:
-    """Hilo de sondeo periódico."""
+    """Hilo de sondeo: atiende disparos manuales y, si toca, también periódicos."""
 
-    def __init__(self, service: DashboardService, interval_seconds: int | None = None) -> None:
+    def __init__(
+        self,
+        service: DashboardService,
+        interval_seconds: int | None = None,
+        periodic: bool = True,
+    ) -> None:
         settings = config.Settings()
         self.service = service
         self.interval = max(60, int(interval_seconds or settings.poll_interval_seconds))
+        self.periodic = periodic
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self.last_run: dict | None = None
         self.last_error: str | None = None
+        self.progress: dict = {
+            "running": False,
+            "done": 0,
+            "total": 0,
+            "current": None,
+        }
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -56,11 +70,13 @@ class Poller:
     # ------------------------------------------------------------------
     def _loop(self) -> None:
         settings = config.Settings()
-        if settings.poll_on_start:
+        if self.periodic and settings.poll_on_start:
             self._run_once()
         while not self._stop.is_set():
-            # Espera al intervalo, pero se despierta antes si se pide a mano.
-            self._wake.wait(timeout=self.interval)
+            # Sin sondeo periódico la espera es indefinida: el hilo queda
+            # dormido hasta que alguien pida uno a mano.
+            timeout = self.interval if self.periodic else None
+            self._wake.wait(timeout=timeout)
             self._wake.clear()
             if self._stop.is_set():
                 break
@@ -74,36 +90,24 @@ class Poller:
             if not accounts:
                 self.last_error = None
                 self.last_run = {"accounts": [], "new": 0, "skipped": "sin cuentas activas"}
+                self.progress.update({"running": False, "done": 0, "total": 0, "current": None})
                 return
-            self.last_run = self.service.poll()
+            self.last_run = self.service.poll(progress=self.progress)
             self.last_error = None
         except Exception as exc:  # noqa: BLE001 - el hilo nunca debe morir
             self.last_error = str(exc)[:300]
             self.service.store.log(f"Sondeo automático fallido: {self.last_error}", level="error")
         finally:
+            self.progress.update({"running": False, "current": None})
             self._lock.release()
 
     def status(self) -> dict:
         return {
             "running": self.running,
+            "periodic": self.periodic,
             "interval_seconds": self.interval,
             "busy": self._lock.locked(),
             "last_run": self.last_run,
             "last_error": self.last_error,
+            "progress": dict(self.progress),
         }
-
-
-def background_poll_once(service: DashboardService) -> None:
-    """Utilidad para lanzar un sondeo suelto sin bloquear la petición HTTP."""
-    threading.Thread(target=_safe_poll, args=(service,), daemon=True).start()
-
-
-def _safe_poll(service: DashboardService) -> None:
-    try:
-        service.poll()
-    except Exception:  # noqa: BLE001 - se registra dentro de poll
-        pass
-
-
-def sleep(seconds: float) -> None:
-    time.sleep(seconds)

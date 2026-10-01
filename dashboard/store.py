@@ -17,6 +17,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from . import config
+from .clock import CLOCK
 
 #: Estados del ciclo de vida de una publicación.
 STATUS_NEW = "nuevo"
@@ -103,7 +104,13 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 def utcnow() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    """Marca de tiempo actual, con la hora verificada.
+
+    No se usa `datetime.now` directamente a propósito: el reloj del sistema
+    puede estar desviado, y de estas marcas depende el orden de la bandeja
+    cuando una publicación no trae fecha de origen.
+    """
+    return CLOCK.now().replace(microsecond=0).isoformat()
 
 
 class Store:
@@ -431,6 +438,14 @@ class Store:
                     "SELECT * FROM cards ORDER BY id DESC LIMIT 200"
                 ).fetchall()
         return [_decode_card(dict(row)) for row in rows]
+
+    def latest_card_ids(self) -> dict[str, int]:
+        """Mapa `tweet_id -> id` de la tarjeta más reciente de cada publicación."""
+        with self._cursor() as connection:
+            rows = connection.execute(
+                "SELECT tweet_id, MAX(id) AS card_id FROM cards GROUP BY tweet_id"
+            ).fetchall()
+        return {row["tweet_id"]: int(row["card_id"]) for row in rows}
 
     # --- entregas ------------------------------------------------------
     def record_delivery(

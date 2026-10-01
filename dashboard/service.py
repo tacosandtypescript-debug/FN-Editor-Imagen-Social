@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 
 from . import config
+from . import timefmt
+from .clock import CLOCK
 from .pipeline import cards as cards_pipeline
 from .pipeline import media as media_pipeline
 from .providers import analysis as analysis_providers
@@ -39,6 +41,7 @@ class DashboardService:
     # ------------------------------------------------------------------
     def state(self) -> dict:
         settings = config.Settings()
+        self.sync_clock()
         return {
             "app": "EditImg Dashboard",
             "settings": config.redacted(settings),
@@ -48,8 +51,57 @@ class DashboardService:
             "analysis_providers": [status.__dict__ for status in analysis_providers.available_providers()],
             "delivery_providers": [status.__dict__ for status in telegram_providers.available_providers()],
             "profiles": timeline_providers.profile_directories(),
+            "clock": self.clock_status(),
             "events": self.store.recent_events(40),
         }
+
+    # ------------------------------------------------------------------
+    # Reloj
+    # ------------------------------------------------------------------
+    def sync_clock(self, force: bool = False) -> dict:
+        """Asegura que la hora real está medida y la guarda para el próximo arranque.
+
+        Es importante por dos motivos independientes: el reloj del sistema
+        puede estar desviado, y la zona configurada puede no ser la del
+        usuario. Sin corregir lo primero, «hace X minutos» se calcula contra
+        una hora falsa; sin lo segundo, la fecha mostrada sería de otro país.
+        """
+        settings = config.Settings()
+        CLOCK.timezone_name = settings.timezone_name
+        if settings.utc_offset_hours is not None:
+            CLOCK.set_local_offset_override(settings.utc_offset_hours)
+
+        first_measurement = CLOCK._measured_at is None  # noqa: SLF001 - arranque
+        if not force and not first_measurement and not CLOCK.is_stale():
+            return CLOCK.status()
+
+        # Se parte del valor guardado para tener hora correcta aunque la red
+        # falle, pero se vuelve a medir: el reloj puede haberse movido desde el
+        # arranque anterior, como de hecho ocurre en esta máquina.
+        stored = self.store.get_setting("clock_offset_seconds")
+        if stored is not None and first_measurement:
+            try:
+                CLOCK.set_offset(float(stored), source="guardado", trusted=False)
+            except (TypeError, ValueError):
+                pass
+
+        # `measure()` conserva el valor anterior si no logra ninguna muestra.
+        status = CLOCK.measure()
+        if status.get("trusted"):
+            self.store.set_setting("clock_offset_seconds", str(status["offset_seconds"]))
+            self.store.set_setting("clock_source", str(status.get("source") or ""))
+        return status
+
+    def clock_status(self) -> dict:
+        status = CLOCK.status()
+        status["now_utc"] = CLOCK.now().replace(microsecond=0).isoformat()
+        status["now_local"] = (
+            CLOCK.to_local(CLOCK.now()).replace(tzinfo=None, microsecond=0).isoformat()
+        )
+        return status
+
+    def now(self):
+        return CLOCK.now()
 
     def events(self, limit: int = 60) -> list[dict]:
         return self.store.recent_events(limit)
@@ -75,38 +127,80 @@ class DashboardService:
     # ------------------------------------------------------------------
     # Descubrimiento
     # ------------------------------------------------------------------
-    def poll(self, handle: str | None = None, provider: str | None = None) -> dict:
-        """Busca publicaciones nuevas en las cuentas monitoreadas."""
-        accounts = (
-            [self.store.get_account(handle)] if handle else self.store.list_accounts(active_only=True)
-        )
-        accounts = [account for account in accounts if account]
+    def poll(
+        self,
+        handle: str | None = None,
+        provider: str | None = None,
+        progress: dict | None = None,
+    ) -> dict:
+        """Busca publicaciones nuevas en las cuentas monitoreadas.
+
+        Se leen todas las cuentas con una sola pasada del proveedor elegido:
+        con el navegador eso significa **una única ventana de Chrome** para
+        todas, en lugar de abrir y cerrar una por cuenta.
+        """
+        if handle:
+            account = self.store.get_account(handle)
+            accounts = [account] if account else []
+        else:
+            accounts = self.store.list_accounts(active_only=True)
         if not accounts:
             raise DashboardError("no hay cuentas activas que revisar")
 
+        handles = [account["handle"] for account in accounts]
+        if progress is not None:
+            progress.update({"total": len(handles), "done": 0, "current": None, "running": True})
+
+        try:
+            batch = timeline_providers.fetch_timelines_batch(handles, provider)
+        except Exception as exc:  # noqa: BLE001 - se informa cuenta por cuenta
+            message = str(exc)[:400]
+            for account in accounts:
+                self.store.mark_account_checked(account["handle"], error=message)
+            self.store.log(f"Sondeo fallido: {message}", level="error")
+            if progress is not None:
+                progress.update({"done": len(handles), "current": None, "running": False})
+            return {
+                "accounts": [
+                    {"handle": name, "ok": False, "new": 0, "error": message}
+                    for name in handles
+                ],
+                "new": 0,
+                "provider": None,
+            }
+
+        provider_name = batch["provider"]
         results: list[dict] = []
         total_new = 0
         for account in accounts:
-            one = self._poll_account(account, provider)
+            name = account["handle"]
+            if progress is not None:
+                progress["current"] = name
+            outcome = batch["results"].get(name)
+            if isinstance(outcome, Exception):
+                one = self._record_failure(name, str(outcome))
+            else:
+                one = self._record_success(name, outcome, provider_name, batch.get("attempts"))
             total_new += one["new"]
             results.append(one)
+            if progress is not None:
+                progress["done"] += 1
 
+        if progress is not None:
+            progress.update({"current": None, "running": False})
         self.store.log(
-            f"Sondeo terminado: {total_new} publicación(es) nueva(s) en {len(accounts)} cuenta(s)"
+            f"Sondeo terminado: {total_new} publicación(es) nueva(s) en {len(accounts)} cuenta(s) "
+            f"vía {provider_name}"
         )
-        return {"accounts": results, "new": total_new}
+        return {"accounts": results, "new": total_new, "provider": provider_name}
 
-    def _poll_account(self, account: dict, provider: str | None) -> dict:
-        handle = account["handle"]
-        try:
-            outcome = timeline_providers.fetch_timeline(handle, provider)
-        except Exception as exc:  # noqa: BLE001 - una cuenta caída no detiene el sondeo
-            message = str(exc)[:400]
-            self.store.mark_account_checked(handle, error=message)
-            self.store.log(f"Fallo al leer @{handle}: {message}", level="error")
-            return {"handle": handle, "ok": False, "new": 0, "error": message, "provider": None}
-
-        tweets = outcome["tweets"]
+    def _record_success(
+        self,
+        handle: str,
+        tweets: list[dict],
+        provider_name: str | None,
+        attempts: list[dict] | None = None,
+    ) -> dict:
         latest = max((tweet["tweet_id"] for tweet in tweets), default=None)
         # Se enriquecen solo las que aún no están en la base de datos.
         known = {tweet["tweet_id"] for tweet in self.store.list_tweets(limit=1000)}
@@ -116,18 +210,16 @@ class DashboardService:
         result = self.store.upsert_tweets(tweets)
         inserted = len(result["inserted"])
         self.store.mark_account_checked(
-            handle,
-            error=None,
-            last_post_id=str(latest) if latest else None,
+            handle, error=None, last_post_id=str(latest) if latest else None
         )
         note = ""
-        if outcome["attempts"]:
+        if attempts:
             note = " (con respaldo: " + "; ".join(
-                f"{a['provider']} falló" for a in outcome["attempts"]
+                f"{item['provider']} falló" for item in attempts
             ) + ")"
         self.store.log(
             f"@{handle}: {inserted} nueva(s), {result['duplicates']} ya conocida(s) "
-            f"vía {outcome['provider']}{note}"
+            f"vía {provider_name}{note}"
         )
         return {
             "handle": handle,
@@ -135,9 +227,15 @@ class DashboardService:
             "new": inserted,
             "duplicates": result["duplicates"],
             "total_seen": len(tweets),
-            "provider": outcome["provider"],
-            "attempts": outcome["attempts"],
+            "provider": provider_name,
+            "attempts": attempts or [],
         }
+
+    def _record_failure(self, handle: str, message: str) -> dict:
+        detail = str(message)[:400]
+        self.store.mark_account_checked(handle, error=detail)
+        self.store.log(f"Fallo al leer @{handle}: {detail}", level="error")
+        return {"handle": handle, "ok": False, "new": 0, "error": detail, "provider": None}
 
     def _enrich(self, tweets: list[dict]) -> None:
         """Completa fecha y medios reales consultando los mirrors públicos.
@@ -165,13 +263,23 @@ class DashboardService:
     # Publicaciones
     # ------------------------------------------------------------------
     def list_tweets(self, **kwargs) -> list[dict]:
-        return self.store.list_tweets(**kwargs)
+        cards = self.store.latest_card_ids()
+        tweets = [
+            timefmt.decorate_tweet(tweet, CLOCK) for tweet in self.store.list_tweets(**kwargs)
+        ]
+        for tweet in tweets:
+            card_id = cards.get(tweet["tweet_id"])
+            tweet["card_id"] = card_id
+            tweet["has_card"] = card_id is not None
+            if card_id:
+                tweet["editor_url"] = f"/editor.html?card={card_id}"
+        return tweets
 
     def get_tweet(self, tweet_id: str) -> dict:
         tweet = self.store.get_tweet(tweet_id)
         if not tweet:
             raise DashboardError(f"no existe la publicación {tweet_id}")
-        return tweet
+        return timefmt.decorate_tweet(tweet, CLOCK)
 
     def set_tweet_status(self, tweet_id: str, status: str) -> dict:
         self.get_tweet(tweet_id)
@@ -195,6 +303,38 @@ class DashboardService:
             tweet_id=tweet_id,
         )
         return self.get_tweet(tweet_id)
+
+    def process_tweet(
+        self,
+        tweet_id: str,
+        params: dict | None = None,
+        provider: str | None = None,
+    ) -> dict:
+        """Prepara una publicación de principio a fin, en un solo paso.
+
+        Es lo que dispara el botón «Procesar»: analiza si todavía no hay
+        análisis, descarga los medios y compone la tarjeta. Deja el resultado
+        listo para abrir en el editor independiente.
+        """
+        tweet = self.get_tweet(tweet_id)
+        if not tweet.get("media"):
+            raise DashboardError(
+                "la publicación no tiene imágenes: el compositor necesita al menos una"
+            )
+        done: list[str] = []
+        if not tweet.get("analysis"):
+            self.analyse(tweet_id, provider)
+            done.append("análisis de texto")
+
+        card = self.prepare_card(tweet_id, params)
+        done.append("descarga de medios y composición")
+
+        return {
+            "card": card,
+            "tweet": self.get_tweet(tweet_id),
+            "steps": done,
+            "editor_url": f"/editor.html?card={card['id']}",
+        }
 
     # ------------------------------------------------------------------
     # Tarjetas
@@ -354,6 +494,73 @@ class DashboardService:
         if not card:
             raise DashboardError(f"no existe la tarjeta {card_id}")
         return card
+
+    def regenerate_text(
+        self,
+        card_id: int,
+        *,
+        instructions: str | None = None,
+        render: bool = True,
+        provider: str | None = None,
+    ) -> dict:
+        """Vuelve a generar **solo el texto**: titular, texto inferior y caption.
+
+        No toca los medios descargados ni ningún otro ajuste de la tarjeta: es
+        la operación pensada para cuando el texto no convence y se quiere otra
+        propuesta sin rehacer el resto.
+
+        Se le pasa al modelo el texto anterior para que no repita lo mismo y,
+        opcionalmente, una indicación del usuario («más corto», «otro
+        enfoque»).
+        """
+        card = self.get_card(card_id)
+        tweet = self.get_tweet(card["tweet_id"])
+        params = dict(card.get("params") or {})
+
+        prompt_tweet = dict(tweet)
+        previous = {
+            "top": params.get("top") or "",
+            "bottom": params.get("bottom") or "",
+            "caption": params.get("caption") or "",
+        }
+        if any(previous.values()):
+            prompt_tweet["previous"] = previous
+        if instructions and instructions.strip():
+            prompt_tweet["instructions"] = instructions.strip()
+
+        try:
+            result = analysis_providers.analyse_tweet(prompt_tweet, provider)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)[:400]
+            self.store.log(
+                f"Regeneración de texto fallida en la tarjeta {card_id}: {message}",
+                level="error",
+                tweet_id=card["tweet_id"],
+            )
+            raise DashboardError(message) from exc
+
+        params["top"] = result["top"]
+        params["bottom"] = result["bottom"]
+        params["caption"] = result["caption"]
+        params["hashtags"] = result["hashtags"]
+        self.store.update_card(card_id, params=params)
+        self.store.update_tweet(card["tweet_id"], analysis_json=result)
+
+        self.store.log(
+            f"Texto regenerado en la tarjeta {card_id} ({result['provider']})"
+            + (f" con indicación: {instructions.strip()[:60]}" if instructions else ""),
+            tweet_id=card["tweet_id"],
+        )
+
+        refreshed = self.get_card(card_id)
+        if render:
+            refreshed = self.render_card(card_id, params)
+        return {
+            "card": refreshed,
+            "analysis": result,
+            "text_only": True,
+            "rendered": bool(render),
+        }
 
     def card_image(self, card_id: int) -> Path:
         card = self.get_card(card_id)

@@ -217,6 +217,23 @@ class BrowserTimeline:
 
     # -- lectura --------------------------------------------------------
     def fetch(self, handle: str) -> list[dict]:
+        """Lee una sola cuenta. Mantiene el contrato común de proveedor."""
+        resultados = self.fetch_many([handle])
+        resultado = resultados.get(handle)
+        if isinstance(resultado, Exception):
+            raise resultado
+        return resultado
+
+    def fetch_many(self, handles: list[str]) -> dict:
+        """Lee varias cuentas **en una sola sesión de navegador**.
+
+        Es importante: abrir y cerrar Chrome una vez por cuenta multiplica el
+        tiempo y hace parpadear ventanas sin parar. Con una sesión, el mismo
+        navegador recorre las cuentas una detrás de otra.
+
+        Devuelve `{handle: lista}` y, si una cuenta falla, `{handle: excepción}`
+        para que un problema puntual no tumbe el resto.
+        """
         ok, detail = self.playwright_available()
         if not ok:
             raise ProviderError(detail)
@@ -227,7 +244,7 @@ class BrowserTimeline:
 
         profile = config.PROFILES_DIR / "x"
         profile.mkdir(parents=True, exist_ok=True)
-        url = f"https://x.com/{handle}"
+        results: dict = {}
 
         with _BROWSER_LOCK:
             try:
@@ -242,28 +259,37 @@ class BrowserTimeline:
                     )
                     try:
                         page = context.pages[0] if context.pages else context.new_page()
-                        page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=self.settings.browser_timeout_ms,
-                        )
-                        page.wait_for_timeout(self.settings.browser_settle_ms)
-                        for _ in range(max(0, self.settings.browser_max_scrolls)):
-                            page.mouse.wheel(0, 4000)
-                            page.wait_for_timeout(2500)
-                        raw = page.locator("article").evaluate_all(EXTRACT_JS)
-                        blocked = _looks_blocked(page)
+                        for handle in handles:
+                            try:
+                                results[handle] = self._read_handle(page, handle)
+                            except ProviderError as exc:
+                                results[handle] = exc
+                            except (PlaywrightTimeout, PlaywrightError) as exc:
+                                results[handle] = ProviderError(
+                                    f"fallo del navegador en @{handle}: {str(exc)[:200]}"
+                                )
                     finally:
                         context.close()
             except PlaywrightTimeout as exc:
-                raise ProviderError(f"tiempo de espera agotado al abrir {url}: {exc}") from exc
+                raise ProviderError(f"tiempo de espera agotado al abrir el navegador: {exc}") from exc
             except PlaywrightError as exc:
-                raise ProviderError(f"fallo del navegador: {str(exc)[:300]}") from exc
+                raise ProviderError(f"no se pudo abrir el navegador: {str(exc)[:300]}") from exc
+        return results
 
-        if blocked:
+    def _read_handle(self, page, handle: str) -> list[dict]:
+        """Extrae las publicaciones de una cuenta usando una página ya abierta."""
+        url = f"https://x.com/{handle}"
+        page.goto(url, wait_until="domcontentloaded", timeout=self.settings.browser_timeout_ms)
+        page.wait_for_timeout(self.settings.browser_settle_ms)
+        for _ in range(max(0, self.settings.browser_max_scrolls)):
+            page.mouse.wheel(0, 4000)
+            page.wait_for_timeout(2500)
+        raw = page.locator("article").evaluate_all(EXTRACT_JS)
+        if _looks_blocked(page):
             raise ProviderError(
                 "X pidió iniciar sesión o bloqueó la lectura. Abre el perfil "
-                f"{profile} con Chrome, inicia sesión una vez y vuelve a intentarlo."
+                f"{config.PROFILES_DIR / 'x'} con Chrome, inicia sesión una vez y "
+                "vuelve a intentarlo."
             )
 
         records: list[TweetRecord] = []
@@ -274,12 +300,11 @@ class BrowserTimeline:
                 continue
             seen.add(tweet_id)
             author = (entry.get("author") or handle).strip()
-            text = (entry.get("text") or "").strip() or None
             records.append(
                 TweetRecord(
                     tweet_id=tweet_id,
                     source_handle=handle,
-                    text=text,
+                    text=(entry.get("text") or "").strip() or None,
                     url=entry.get("permalink") or f"https://x.com/{author}/status/{tweet_id}",
                     author_handle=author,
                     # X ya no expone la fecha exacta en el DOM: solo la relativa.
@@ -380,7 +405,7 @@ def fallback_chain(preferred: str) -> list[str]:
 
 
 def fetch_timeline(handle: str, preferred: str | None = None) -> dict:
-    """Obtiene la timeline intentando los proveedores en orden.
+    """Obtiene la timeline de una cuenta intentando los proveedores en orden.
 
     Devuelve ``{"provider": ..., "tweets": [...], "attempts": [...]}``.
     """
@@ -404,6 +429,84 @@ def fetch_timeline(handle: str, preferred: str | None = None) -> dict:
         return {"provider": name, "tweets": tweets, "attempts": attempts}
     detail = "; ".join(f"{a['provider']}: {a['detail']}" for a in attempts) or "sin proveedores"
     raise ProviderError(f"no se pudo leer @{handle} ({detail})")
+
+
+def fetch_timelines_batch(handles: list[str], preferred: str | None = None) -> dict:
+    """Lee varias cuentas agrupando cada proveedor en **una sola pasada**.
+
+    Dos cosas a la vez, que es lo que interesa:
+
+    * El proveedor de navegador abre Chrome **una vez** para todas las cuentas;
+      hacerlo por cuenta multiplicaría el tiempo y haría parpadear ventanas.
+    * Si una cuenta concreta falla con un proveedor, se reintenta con el
+      siguiente sin repetir las que ya salieron bien.
+
+    Devuelve ``{"provider": resumen, "results": {handle: lista|excepcion},
+    "used": {handle: proveedor}, "attempts": [...]}``.
+    """
+    if not handles:
+        return {"provider": None, "results": {}, "used": {}, "attempts": []}
+
+    settings = config.Settings()
+    first = (preferred or settings.timeline_provider or "browser").strip().lower()
+    attempts: list[dict] = []
+    results: dict = {handle: ProviderError("sin intentar") for handle in handles}
+    used: dict = {}
+
+    for name in fallback_chain(first):
+        pending = [handle for handle in handles if isinstance(results.get(handle), Exception)]
+        if not pending:
+            break
+
+        provider = build_provider(name)
+        status = provider.status()
+        if not status.available:
+            attempts.append({"provider": name, "ok": False, "detail": status.detail})
+            continue
+
+        try:
+            if hasattr(provider, "fetch_many"):
+                partial = provider.fetch_many(pending)
+            else:
+                partial = {}
+                for handle in pending:
+                    try:
+                        partial[handle] = provider.fetch(handle)
+                    except Exception as exc:  # noqa: BLE001
+                        partial[handle] = exc
+        except ProviderError as exc:
+            attempts.append({"provider": name, "ok": False, "detail": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001 - un proveedor roto no debe tumbar el sondeo
+            attempts.append(
+                {"provider": name, "ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+            )
+            continue
+
+        solved = 0
+        for handle in pending:
+            value = partial.get(handle)
+            if value is None:
+                continue
+            results[handle] = value
+            if isinstance(value, Exception):
+                attempts.append({"provider": name, "handle": handle, "ok": False, "detail": str(value)[:200]})
+            else:
+                used[handle] = name
+                solved += 1
+        if not solved:
+            attempts.append({"provider": name, "ok": False, "detail": "ninguna cuenta se pudo leer"})
+
+    resolved = [handle for handle in handles if not isinstance(results[handle], Exception)]
+    if not resolved:
+        detail = "; ".join(
+            f"{item['provider']}: {item.get('detail', '')[:80]}" for item in attempts[-4:]
+        ) or "sin proveedores"
+        raise ProviderError(f"no se pudo leer ninguna cuenta ({detail})")
+
+    providers_used = sorted(set(used.values()))
+    summary = providers_used[0] if len(providers_used) == 1 else "mixto:" + "+".join(providers_used)
+    return {"provider": summary, "results": results, "used": used, "attempts": attempts}
 
 
 def available_providers() -> list[ProviderStatus]:

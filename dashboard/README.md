@@ -26,9 +26,9 @@ Abre <http://127.0.0.1:8765/>.
 Opciones:
 
 ```powershell
-python -m dashboard --port 9000      # otro puerto
-python -m dashboard --no-poller      # sin sondeo automático
-python -m dashboard --host 0.0.0.0   # exponerlo en la red local (ojo)
+python -m dashboard --lan          # accesible desde el móvil en la misma red
+python -m dashboard --port 9000    # otro puerto
+python -m dashboard --no-poller    # sin sondeo periódico (el botón sigue activo)
 ```
 
 El núcleo funciona **solo con la biblioteca estándar y Pillow**, así que
@@ -234,6 +234,81 @@ python -m unittest tests.test_dashboard_core tests.test_dashboard_integration
 
 Los tests del dashboard no salen a la red: usan fixtures de RSS, un compositor
 real con imágenes generadas al vuelo y un servidor OpenAI simulado.
+
+---
+
+## Abrirlo desde el móvil (misma red)
+
+Por defecto escucha solo en `127.0.0.1`, así que **ningún otro dispositivo
+puede entrar**. Para abrirlo desde el teléfono:
+
+```powershell
+python -m dashboard --lan
+```
+
+Al escuchar en la red local, el dashboard **genera una clave de acceso** y la
+imprime con la URL completa, por ejemplo:
+
+```
+http://10.0.0.44:8765/?token=hMYkGn-kyL0XjI3d
+```
+
+Ábrela una vez en el móvil: la clave queda en una cookie y ya no hace falta
+repetirla. Se guarda en la base de datos, así que no cambia entre reinicios.
+Si quieres fijar la tuya, ponla en `DASHBOARD_ACCESS_TOKEN`.
+
+> **Firewall.** Si el Ethernet está en perfil «Público» (lo habitual), Windows
+> bloquea la entrada y el móvil no cargará la página. Hay que permitir el
+> puerto **una vez**, en un PowerShell **como administrador**:
+>
+> ```powershell
+> New-NetFirewallRule -DisplayName "EditImg Dashboard 8765" `
+>   -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow -Profile Any
+> ```
+>
+> Alternativa sin tocar el firewall: si tienes Tailscale en el móvil, entra por
+> la IP de Tailscale del PC (aparece también en la lista de URLs al arrancar).
+
+---
+
+## Hora y zona horaria
+
+Dos problemas distintos, resueltos por separado:
+
+1. **El reloj del sistema puede estar mal.** Se ha medido un desfase real de
+   seis horas en esta máquina. El dashboard pide la cabecera `Date` a varios
+   servidores públicos (Google, Cloudflare, Bing, GitHub), toma la **mediana** y
+   ancla ahí la hora usando el reloj monotónico. A partir de ese momento la hora
+   **no depende del reloj del PC**: aunque alguien lo cambie, el dashboard sigue
+   bien.
+2. **La zona configurada puede no ser la del usuario.** Windows estaba en zona
+   europea mientras el usuario está en Quebec. El huso se resuelve con reglas
+   (`America/Toronto`, con horario de verano), no con lo que diga el sistema.
+
+La comprobación de consenso usa la mediana en lugar del máximo menos el mínimo:
+un servidor con la hora algo desviada (la de GitHub iba 6 s por detrás) no
+invalida una medición correcta. La pestaña **Estado y ajustes** muestra el
+desfase detectado y de dónde sale el huso.
+
+---
+
+## Flujo de trabajo en la interfaz
+
+1. **Bandeja.** Lista **cronológica de una sola columna**, de más reciente a más
+   antigua, agrupada por día (`Hoy`, `Ayer`, `30 sep 2026`). Cada publicación
+   muestra cuenta, autor real (los reposts se atribuyen bien), texto,
+   miniaturas, **hora relativa** (`hace 2 h 15 min`) con la fecha exacta al lado,
+   enlace original y estado.
+2. **Procesar.** Un botón por publicación que hace el trabajo completo:
+   análisis del texto, descarga de medios y composición de la tarjeta.
+3. **Abrir editor.** Al terminar aparece al lado el botón que abre el **editor
+   independiente** en su propia pestaña.
+4. **Editor independiente** (`/editor.html?card=N`). Previsualización grande,
+   edición de texto y composición, entrega e historial. Lo único que se puede
+   **regenerar con IA** es el texto —titular de arriba, texto de abajo y
+   caption—: no toca las imágenes ni ningún otro ajuste, y recompone la tarjeta
+   sola. Admite una indicación opcional («más corto», «otro enfoque») y recibe
+   la versión anterior para no repetirla.
 
 ---
 

@@ -9,6 +9,8 @@ const app = {
   selectedId: null,
   card: null,
   busy: false,
+  //: Día actual en la hora local del usuario, según el reloj verificado.
+  today: null,
 };
 
 /* ------------------------------------------------------------------ */
@@ -79,6 +81,9 @@ function withBusy(button, label, task) {
 async function loadState() {
   const state = await api("/api/state");
   app.state = state;
+  // «Hoy» y «ayer» se calculan con la hora verificada, no con la del navegador:
+  // el reloj de la máquina puede estar desviado.
+  app.today = ((state.clock && state.clock.now_local) || "").slice(0, 10) || null;
   renderProviderPills(state);
   renderCounts(state.counts);
   renderAccounts(state.accounts);
@@ -105,6 +110,22 @@ function renderProviderPills(state) {
         `<span class="dot"></span>${escapeHtml(label)}: ${escapeHtml(provider.name)}</span>`
       );
     }
+  }
+  const clock = state.clock;
+  if (clock) {
+    // El reloj del sistema puede estar desviado: se avisa en lugar de mostrar
+    // horas mal sin explicación.
+    const skewed = Math.abs(clock.offset_seconds || 0) > 60;
+    parts.push(
+      `<span class="pill ${skewed ? "warn" : "ok"}" title="${escapeHtml(
+        skewed
+          ? "Las horas se calculan contra servidores públicos de hora, no contra el reloj del sistema."
+          : "El reloj del sistema coincide con la hora de referencia."
+      )}">` +
+      `<span class="dot"></span>🕒 ${escapeHtml(clock.local_offset_human || "UTC")}` +
+      (skewed ? ` · reloj ${escapeHtml(clock.offset_human || "")}` : "") +
+      `</span>`
+    );
   }
   $("provider-pills").innerHTML = parts.join("");
 }
@@ -251,39 +272,144 @@ async function loadTweets() {
   renderInbox(app.tweets);
 }
 
+/* ------------------------------------------------------------------ */
+/* Bandeja: lista cronológica agrupada por día                          */
+/* ------------------------------------------------------------------ */
+function sortKey(tweet) {
+  return tweet.posted_at || tweet.fetched_at || "";
+}
+
+/** Resta días a una fecha ISO `YYYY-MM-DD`. */
+function shiftIsoDay(isoDate, delta) {
+  const parts = String(isoDate || "").split("-").map(Number);
+  if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value))) return "";
+  const moment = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  moment.setUTCDate(moment.getUTCDate() + delta);
+  return moment.toISOString().slice(0, 10);
+}
+
+/** «01/10/2026» -> «2026-10-01». */
+function shortToIso(shortDate) {
+  const parts = String(shortDate || "").split("/");
+  return parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : "";
+}
+
+function dayLabel(shortDate) {
+  const iso = shortToIso(shortDate);
+  if (!iso) return "Sin fecha";
+  if (app.today && iso === app.today) return "Hoy";
+  if (app.today && iso === shiftIsoDay(app.today, -1)) return "Ayer";
+  const parts = shortDate.split("/");
+  const months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const month = months[Number(parts[1]) - 1] || parts[1];
+  return `${Number(parts[0])} ${month} ${parts[2]}`;
+}
+
+function tweetCard(tweet) {
+  const thumbs = (tweet.media || []).slice(0, 6).map((url) => (
+    `<img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
+          onerror="this.style.display='none'">`
+  )).join("");
+  const noMedia = !(tweet.media || []).length;
+  // Botón «Procesar» siempre; «Abrir editor» solo cuando ya hay tarjeta.
+  const editorButton = tweet.has_card
+    ? `<button class="small accent" data-editor="${escapeHtml(String(tweet.card_id))}">Abrir editor</button>`
+    : "";
+  return `
+    <div class="tweet ${app.selectedId === tweet.tweet_id ? "selected" : ""}">
+      <div class="meta">
+        <span class="badge ${escapeHtml(tweet.status)}">${escapeHtml(tweet.status)}</span>
+        <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>
+        ${tweet.author_handle && tweet.author_handle !== tweet.source_handle
+          ? `<span class="muted">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}
+      </div>
+      <div class="when">
+        <strong>${escapeHtml(tweet.posted_relative || "sin fecha")}</strong>
+        <span class="muted">· ${escapeHtml(tweet.posted_absolute || "")}</span>
+        ${tweet.date_is_estimated ? `<span class="muted" title="La fuente no dio la fecha exacta; se usa la de descarga.">(aprox.)</span>` : ""}
+      </div>
+      <div class="text">${escapeHtml(tweet.text || "(sin texto)")}</div>
+      ${noMedia
+        ? `<div class="small" style="color:var(--warn)">Sin imágenes: el compositor necesita al menos una para crear la tarjeta.</div>`
+        : `<div class="thumbs">${thumbs}</div>`}
+      <div class="actions">
+        <button class="small primary" data-process="${escapeHtml(tweet.tweet_id)}"
+                ${noMedia ? "disabled title='Sin imágenes'" : ""}>Procesar</button>
+        ${editorButton}
+        ${tweet.url ? `<a class="small" href="${escapeHtml(tweet.url)}" target="_blank" rel="noopener">Ver original</a>` : ""}
+        <button class="small ghost" data-status="${escapeHtml(tweet.tweet_id)}" data-value="descartado">Descartar</button>
+      </div>
+    </div>`;
+}
+
 function renderInbox(tweets) {
   if (!tweets.length) {
     $("inbox").innerHTML = `<div class="empty">No hay publicaciones con este filtro.
       Añade cuentas y pulsa «Buscar ahora».</div>`;
     return;
   }
-  $("inbox").innerHTML = tweets.map((tweet) => {
-    const thumbs = (tweet.media || []).slice(0, 6).map((url) => (
-      `<img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
-            onerror="this.style.display='none'">`
-    )).join("");
-    const noMedia = !(tweet.media || []).length;
-    return `
-      <div class="tweet ${app.selectedId === tweet.tweet_id ? "selected" : ""}">
-        <div class="meta">
-          <span class="badge ${escapeHtml(tweet.status)}">${escapeHtml(tweet.status)}</span>
-          <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>
-          ${tweet.author_handle && tweet.author_handle !== tweet.source_handle
-            ? `<span class="muted">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}
-          <span>${escapeHtml(tweet.posted_at ? formatDate(tweet.posted_at) : (tweet.relative_time || "sin fecha"))}</span>
-        </div>
-        <div class="text">${escapeHtml(tweet.text || "(sin texto)")}</div>
-        ${noMedia
-          ? `<div class="small" style="color:var(--warn)">Sin imágenes: el compositor necesita al menos una para crear la tarjeta.</div>`
-          : `<div class="thumbs">${thumbs}</div>`}
-        <div class="actions">
-          <button class="small primary" data-open="${escapeHtml(tweet.tweet_id)}">Abrir en el editor</button>
-          <button class="small" data-analyze="${escapeHtml(tweet.tweet_id)}">Analizar</button>
-          ${tweet.url ? `<a class="small" href="${escapeHtml(tweet.url)}" target="_blank" rel="noopener">Ver original</a>` : ""}
-          <button class="small ghost" data-status="${escapeHtml(tweet.tweet_id)}" data-value="descartado">Descartar</button>
-        </div>
-      </div>`;
-  }).join("");
+
+  // Se reordena aquí también, por si algún día el origen cambia el criterio:
+  // la promesa de la interfaz es «más reciente primero».
+  const ordered = [...tweets].sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+
+  const blocks = [];
+  let currentDay = null;
+  let buffer = [];
+  let count = 0;
+
+  const flush = () => {
+    if (!buffer.length) return;
+    blocks.push(
+      `<div class="feed-day">
+         <span class="label">${escapeHtml(dayLabel(currentDay))}</span>
+         <span class="count">${count} publicación(es)</span>
+         <span class="line"></span>
+       </div>` + buffer.join("")
+    );
+    buffer = [];
+    count = 0;
+  };
+
+  for (const tweet of ordered) {
+    const day = tweet.posted_short || "";
+    if (day !== currentDay) {
+      flush();
+      currentDay = day;
+    }
+    buffer.push(tweetCard(tweet));
+    count += 1;
+  }
+  flush();
+  $("inbox").innerHTML = blocks.join("");
+}
+
+/* ------------------------------------------------------------------ */
+/* Procesar: analiza, descarga y compone, y revela «Abrir editor»      */
+/* ------------------------------------------------------------------ */
+async function processTweet(tweetId, button) {
+  await withBusy(button, "Procesando…", async () => {
+    try {
+      const payload = await api(`/api/tweets/${tweetId}/process`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const card = payload.card || {};
+      toast(
+        `Tarjeta v${card.version} lista (${(payload.steps || []).join(" + ")}). ` +
+        "Ya puedes abrir el editor."
+      );
+      await loadTweets();
+      await loadState();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+function openEditor(cardId) {
+  // Editor independiente: pestaña propia.
+  window.open(`/editor.html?card=${encodeURIComponent(cardId)}`, "_blank", "noopener");
 }
 
 /* ------------------------------------------------------------------ */
@@ -381,8 +507,15 @@ async function poll() {
   const button = $("btn-poll");
   await withBusy(button, "Buscando…", async () => {
     try {
-      await api("/api/poll", { method: "POST", body: JSON.stringify({ background: true }) });
-      toast("Sondeo iniciado en segundo plano; la bandeja se actualizará sola.");
+      const response = await api("/api/poll", {
+        method: "POST",
+        body: JSON.stringify({ background: true }),
+      });
+      if (!response.started) {
+        toast("El sondeo no llegó a arrancar.", "error");
+        return;
+      }
+      toast("Sondeo iniciado. Se abrirá Chrome para leer las cuentas; puede tardar.");
       await waitForPoller();
       await loadTweets();
       await loadState();
@@ -393,13 +526,35 @@ async function poll() {
 }
 
 async function waitForPoller() {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  let sawActivity = false;
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
-    const state = await api("/api/state");
-    if (!state.poller.busy) {
-      const last = state.poller.last_run;
-      if (last) toast(`Sondeo terminado: ${last.new} publicación(es) nueva(s).`);
-      if (state.poller.last_error) toast(state.poller.last_error, "error");
+    let state;
+    try {
+      state = await api("/api/state");
+    } catch (error) {
+      continue;
+    }
+    const poller = state.poller || {};
+    const progress = poller.progress || {};
+    if (poller.busy) {
+      sawActivity = true;
+      $("btn-poll").innerHTML =
+        `<span class="spinner"></span> ${progress.done || 0}/${progress.total || "?"}`;
+      if (progress.current) {
+        $("render-info") && ($("render-info").textContent = `Leyendo @${progress.current}…`);
+      }
+      continue;
+    }
+    if (sawActivity || !poller.busy) {
+      const last = poller.last_run;
+      if (last && typeof last.new === "number") {
+        toast(`Sondeo terminado: ${last.new} publicación(es) nueva(s).`);
+      } else if (last && last.skipped) {
+        toast(`Sondeo omitido: ${last.skipped}.`);
+      }
+      if (poller.last_error) toast(poller.last_error, "error");
+      renderCounts(state.counts);
       return;
     }
   }
@@ -521,6 +676,14 @@ document.addEventListener("click", async (event) => {
   if (target.id === "btn-generate") return generateCard();
   if (target.id === "btn-render") return renderCard();
   if (target.id === "btn-send") return sendCard();
+
+  if (dataset.process) {
+    return processTweet(dataset.process, target);
+  }
+
+  if (dataset.editor) {
+    return openEditor(dataset.editor);
+  }
 
   if (dataset.open) return openTweet(dataset.open);
 

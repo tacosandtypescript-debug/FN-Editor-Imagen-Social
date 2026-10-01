@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import secrets
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from . import config
 from .poller import Poller
@@ -32,9 +33,11 @@ ROUTES = (
     ("GET", re.compile(r"^/api/tweets/(\d+)$"), "get_tweet"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/status$"), "post_tweet_status"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/analyze$"), "post_tweet_analyze"),
+    ("POST", re.compile(r"^/api/tweets/(\d+)/process$"), "post_tweet_process"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/card$"), "post_tweet_card"),
     ("GET", re.compile(r"^/api/cards/(\d+)$"), "get_card"),
     ("POST", re.compile(r"^/api/cards/(\d+)/render$"), "post_card_render"),
+    ("POST", re.compile(r"^/api/cards/(\d+)/regenerate-text$"), "post_card_regenerate_text"),
     ("POST", re.compile(r"^/api/cards/(\d+)/send$"), "post_card_send"),
     ("GET", re.compile(r"^/api/cards/(\d+)/image$"), "get_card_image"),
     ("GET", re.compile(r"^/api/cards/(\d+)/deliveries$"), "get_card_deliveries"),
@@ -51,6 +54,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
     service: DashboardService
     poller: Poller
 
+    # -- control de acceso ----------------------------------------------
+    def _authorised(self, path: str, query: dict) -> bool:
+        """Comprueba la clave de acceso cuando el dashboard está en la red.
+
+        Desde el propio equipo siempre se entra. Desde otro dispositivo (el
+        móvil, por ejemplo) hace falta la clave, que viaja una vez en la URL y
+        después queda en una cookie para no tener que repetirla.
+        """
+        token = getattr(self.server, "access_token", None)
+        if not token:
+            return True
+        if config.is_loopback(self.client_address[0]):
+            return True
+
+        supplied = _first(query, "token") or (self.headers.get("X-Dashboard-Token") or "").strip()
+        if not supplied:
+            supplied = _cookie(self.headers.get("Cookie"), "editimg_token")
+
+        if supplied and secrets.compare_digest(supplied, token):
+            # Si venía en la URL, se guarda en cookie y se limpia la barra.
+            if _first(query, "token"):
+                clean = path or "/"
+                remaining = {key: values for key, values in query.items() if key != "token"}
+                if remaining:
+                    clean += "?" + urlencode(remaining, doseq=True)
+                self.send_response(302)
+                self.send_header("Location", clean)
+                self.send_header(
+                    "Set-Cookie",
+                    f"editimg_token={token}; Path=/; SameSite=Lax; Max-Age=2592000",
+                )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return True
+
+        body = (
+            "<!DOCTYPE html><html lang='es'><meta charset='utf-8'>"
+            "<title>EditImg Dashboard</title>"
+            "<body style=\"font-family:system-ui;background:#0f0b18;color:#f2eefb;"
+            "padding:40px;line-height:1.6\">"
+            "<h1>Hace falta la clave de acceso</h1>"
+            "<p>Abre la dirección que imprime el dashboard al arrancar, "
+            "incluyendo <code>?token=…</code>. La tienes en la ventana donde "
+            "ejecutaste <code>python -m dashboard</code> o en "
+            "<code>dashboard/.env</code>.</p>"
+            "</body></html>"
+        ).encode("utf-8")
+        try:
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            # El cliente cortó la conexión: no hay nada que responder.
+            pass
+        return False
+
     # -- utilidades -----------------------------------------------------
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003 - firma heredada
         # Silencia el ruido por petición; los sucesos relevantes van a la bitácora.
@@ -58,12 +119,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            # El cliente cortó la conexión (recarga, cierre de pestaña): no es
+            # un error del servidor y no debe ensuciar la consola.
+            pass
 
     def _send_error_json(self, message: str, status: int = 400) -> None:
         self._send_json({"error": message}, status=status)
@@ -100,6 +166,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
 
+        if not self._authorised(path, query):
+            return
+
         if path.startswith("/api/"):
             for route_method, pattern, handler_name in ROUTES:
                 match = pattern.match(path)
@@ -110,10 +179,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 handler = getattr(self, handler_name)
                 try:
                     handler(query, *[unquote(group) for group in match.groups()])
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    return
                 except DashboardError as exc:
                     self._send_error_json(str(exc), status=400)
-                except BrokenPipeError:
-                    return
                 except Exception as exc:  # noqa: BLE001 - última red de seguridad
                     self.service.store.log(
                         f"Error interno en {method} {path}: {type(exc).__name__}: {exc}",
@@ -131,6 +200,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if path in {"/", "/index.html"}:
             self._serve_file(config.WEB_DIR / "index.html")
+            return
+        if path in {"/editor", "/editor.html"}:
+            # Editor independiente: se abre en su propia pestaña.
+            self._serve_file(config.WEB_DIR / "editor.html")
             return
         if path.startswith("/static/"):
             self._serve_file(config.WEB_DIR / path[len("/static/") :])
@@ -155,12 +228,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "application/json",
         }:
             content_type += "; charset=utf-8"
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
 
     # -- endpoints ------------------------------------------------------
     def get_state(self, query, *groups) -> None:
@@ -199,6 +275,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if payload.get("background"):
             if handle:
                 raise DashboardError("el sondeo en segundo plano es para todas las cuentas")
+            # El hilo debe existir para poder atender el disparo; si el servidor
+            # se creó sin hilo periódico, se levanta aquí.
+            if not self.poller.running:
+                self.poller.start()
             if not self.poller.trigger():
                 raise DashboardError("ya hay un sondeo en curso")
             self._send_json({"started": True, "poller": self.poller.status()}, status=202)
@@ -241,6 +321,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
         card = self.service.prepare_card(tweet_id, payload.get("params") or {})
         self._send_json({"card": card}, status=201)
 
+    def post_tweet_process(self, query, tweet_id: str) -> None:
+        """Botón «Procesar»: análisis, descarga y composición en un paso."""
+        payload = self._read_json()
+        result = self.service.process_tweet(
+            tweet_id,
+            payload.get("params") or None,
+            payload.get("provider") or None,
+        )
+        self._send_json(result, status=201)
+
+    def post_card_regenerate_text(self, query, card_id: str) -> None:
+        """Regenera solo titular, texto inferior y caption."""
+        payload = self._read_json()
+        result = self.service.regenerate_text(
+            int(card_id),
+            instructions=payload.get("instructions"),
+            render=bool(payload.get("render", True)),
+            provider=payload.get("provider") or None,
+        )
+        self._send_json(result)
+
     def get_card(self, query, card_id: str) -> None:
         self._send_json({"card": self.service.get_card(int(card_id))})
 
@@ -281,6 +382,15 @@ def _first(query: dict, key: str) -> str:
     return values[0].strip() if values and values[0] else ""
 
 
+def _cookie(header: str | None, name: str) -> str:
+    """Lee una cookie concreta de la cabecera `Cookie`."""
+    for chunk in str(header or "").split(";"):
+        key, _, value = chunk.strip().partition("=")
+        if key == name:
+            return value.strip()
+    return ""
+
+
 def _int_param(query: dict, key: str, default: int) -> int:
     raw = _first(query, key)
     if not raw:
@@ -296,30 +406,67 @@ def create_server(
     port: int | None = None,
     service: DashboardService | None = None,
     poller: Poller | None = None,
+    periodic: bool = True,
 ) -> tuple[ThreadingHTTPServer, DashboardService, Poller]:
-    """Crea el servidor listo para `serve_forever`."""
+    """Crea el servidor listo para `serve_forever`.
+
+    Si se escucha fuera de localhost, se exige una clave de acceso: el
+    dashboard puede enviar a Telegram y no conviene dejarlo abierto a
+    cualquiera que esté en la misma red.
+    """
     settings = config.Settings()
     service = service or DashboardService()
-    poller = poller if poller is not None else Poller(service)
+    poller = poller if poller is not None else Poller(service, periodic=periodic)
+    bind_host = host or settings.host
+
+    access_token = ""
+    if bind_host not in {"127.0.0.1", "localhost", "::1"}:
+        access_token = settings.access_token or service.store.get_setting("access_token") or ""
+        if not access_token:
+            access_token = secrets.token_urlsafe(12)
+            service.store.set_setting("access_token", access_token)
+            service.store.log("Clave de acceso generada para el acceso desde la red local")
 
     handler = type(
         "BoundDashboardHandler",
         (DashboardHandler,),
         {"service": service, "poller": poller},
     )
-    server = ThreadingHTTPServer((host or settings.host, settings.port if port is None else port), handler)
+    server = ThreadingHTTPServer((bind_host, settings.port if port is None else port), handler)
     server.daemon_threads = True
+    server.access_token = access_token  # type: ignore[attr-defined]
     return server, service, poller
 
 
-def serve(host: str | None = None, port: int | None = None, start_poller: bool = True) -> None:
-    """Arranca el dashboard y bloquea hasta Ctrl+C."""
-    server, service, poller = create_server(host, port)
-    if start_poller:
-        poller.start()
-    url = f"http://{server.server_address[0]}:{server.server_address[1]}/"
-    service.store.log(f"Dashboard iniciado en {url}")
-    print(f"EditImg Dashboard escuchando en {url}")
+def serve(host: str | None = None, port: int | None = None, periodic: bool = True) -> None:
+    """Arranca el dashboard y bloquea hasta Ctrl+C.
+
+    El hilo del sondeador se lanza siempre: con `periodic=False` simplemente no
+    sondea por su cuenta, pero sigue atendiendo los sondeos pedidos desde la
+    interfaz.
+    """
+    server, service, poller = create_server(host, port, periodic=periodic)
+    poller.start()
+
+    token = getattr(server, "access_token", "")
+    actual_host, actual_port = server.server_address[0], server.server_address[1]
+    urls = config.listen_addresses(actual_host, actual_port)
+    if token:
+        urls = [f"{url}?token={token}" for url in urls]
+
+    service.store.log(f"Dashboard iniciado en {urls[0]}")
+    print("EditImg Dashboard disponible en:")
+    for url in urls:
+        print(f"  {url}")
+    if token:
+        print()
+        print("Hay clave de acceso porque se está escuchando en la red local.")
+        print("Abre la dirección completa (con ?token=…) una vez: el navegador la recuerda.")
+        print("Si Windows bloquea la entrada, permite el puerto 8765 en el firewall.")
+    print(
+        "Sondeo periódico activado." if periodic
+        else "Sondeo periódico desactivado (el botón «Buscar ahora» sigue funcionando)."
+    )
     print("Pulsa Ctrl+C para detenerlo.")
     try:
         server.serve_forever()
@@ -338,16 +485,22 @@ def main() -> int:
     parser.add_argument("--host", default=None, help="interfaz de escucha (defecto 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="puerto (defecto 8765)")
     parser.add_argument(
+        "--lan",
+        action="store_true",
+        help="escuchar en toda la red local para poder abrirlo desde el móvil",
+    )
+    parser.add_argument(
         "--no-poller",
         action="store_true",
-        help="no lanzar el sondeo automático en segundo plano",
+        help="desactivar solo el sondeo periódico (el botón «Buscar ahora» sigue activo)",
     )
     parser.add_argument(
         "--traceback", action="store_true", help="mostrar la traza completa de los errores"
     )
     args = parser.parse_args()
+    host = args.host or ("0.0.0.0" if args.lan else None)
     try:
-        serve(args.host, args.port, start_poller=not args.no_poller)
+        serve(host, args.port, periodic=not args.no_poller)
     except OSError as exc:
         print(f"No se pudo abrir el puerto: {exc}")
         return 1

@@ -91,6 +91,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "si", "sí", "on"}
 
 
+def _env_optional_float(name: str) -> float | None:
+    raw = _env(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw.replace(",", "."))
+    except ValueError:
+        return None
+
+
 def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     raw = _env(name, "").strip()
     if not raw:
@@ -105,6 +115,21 @@ class Settings:
 
     host: str = field(default_factory=lambda: _env("DASHBOARD_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 8765))
+    #: Clave de acceso para cuando el dashboard se expone a la red local. Si
+    #: se escucha fuera de localhost y no hay clave, se genera una sola vez y
+    #: se guarda, para no dejar la herramienta abierta a cualquiera.
+    access_token: str = field(default_factory=lambda: _env("DASHBOARD_ACCESS_TOKEN", ""))
+
+    # --- Hora y zona horaria -------------------------------------------
+    #: Desfase del usuario respecto a UTC, en horas. Si se deja vacío se
+    #: resuelve con la zona de abajo. Ejemplo para Quebec: -4 (verano).
+    utc_offset_hours: float | None = field(
+        default_factory=lambda: _env_optional_float("DASHBOARD_UTC_OFFSET")
+    )
+    #: Zona horaria IANA del usuario. Quebec usa America/Toronto.
+    timezone_name: str = field(
+        default_factory=lambda: _env("DASHBOARD_TIMEZONE", "America/Toronto")
+    )
 
     # --- Descubrimiento de publicaciones -------------------------------
     timeline_provider: str = field(
@@ -179,6 +204,59 @@ def preset_for_format(output_format: str | None) -> Path:
     return PRESETS.get(key, PRESETS["9:16"])
 
 
+def is_loopback(address: str) -> bool:
+    """True si la dirección de origen es el propio equipo."""
+    import ipaddress
+
+    raw = str(address or "").split("%")[0].strip()
+    if raw.lower() == "localhost":
+        return True
+    try:
+        parsed = ipaddress.ip_address(raw)
+    except ValueError:
+        return False
+    if parsed.is_loopback:
+        return True
+    # Direcciones IPv4 mapeadas en IPv6 (::ffff:127.0.0.1).
+    mapped = getattr(parsed, "ipv4_mapped", None)
+    return bool(mapped and mapped.is_loopback)
+
+
+def listen_addresses(host: str, port: int) -> list[str]:
+    """Direcciones por las que se puede alcanzar el dashboard.
+
+    Sirve para imprimir las URLs útiles al arrancar: en el propio equipo, en la
+    red local y, si la hay, por Tailscale.
+    """
+    import socket
+
+    addresses: list[str] = []
+    if host in {"127.0.0.1", "localhost"}:
+        return [f"http://127.0.0.1:{port}/"]
+
+    candidates: set[str] = set()
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # No se envía nada: solo sirve para saber qué interfaz saldría.
+            probe.connect(("8.8.8.8", 80))
+            candidates.add(probe.getsockname()[0])
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            candidates.add(info[4][0])
+    except OSError:
+        pass
+
+    for address in sorted(addrs for addrs in candidates if not addrs.startswith("127.")):
+        addresses.append(f"http://{address}:{port}/")
+    addresses.append(f"http://127.0.0.1:{port}/")
+    return addresses
+
+
 def redacted(settings: Settings) -> dict:
     """Vista pública de los ajustes, sin exponer credenciales completas."""
     def mask(value: str) -> str:
@@ -191,6 +269,9 @@ def redacted(settings: Settings) -> dict:
     return {
         "host": settings.host,
         "port": settings.port,
+        "access_token_set": bool(settings.access_token),
+        "utc_offset_hours": settings.utc_offset_hours,
+        "timezone_name": settings.timezone_name,
         "timeline_provider": settings.timeline_provider,
         "poll_interval_seconds": settings.poll_interval_seconds,
         "poll_on_start": settings.poll_on_start,

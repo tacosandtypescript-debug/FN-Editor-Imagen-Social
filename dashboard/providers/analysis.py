@@ -134,13 +134,16 @@ class OpenAICompatibleAnalysis:
 
         palette = palette_colors()
         user_prompt = build_user_prompt(tweet, palette)
+        # Al regenerar se sube la temperatura: si no, el modelo tiende a
+        # devolver exactamente el mismo texto que ya no gustaba.
+        regenerating = bool(tweet.get("previous"))
         body = {
             "model": self.settings.openai_model,
             "messages": [
                 {"role": "system", "content": build_system_prompt()},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.4,
+            "temperature": 0.95 if regenerating else 0.4,
         }
         headers = {"Content-Type": "application/json"}
         if self.settings.openai_api_key:
@@ -299,6 +302,27 @@ def build_user_prompt(tweet: dict, palette: tuple[str, ...]) -> str:
         "Texto de la publicación:",
         text,
     ]
+
+    instructions = str(tweet.get("instructions") or "").strip()
+    if instructions:
+        lines += [
+            "",
+            "INDICACIÓN DEL USUARIO (tiene prioridad sobre el estilo por defecto):",
+            instructions,
+        ]
+
+    previous = tweet.get("previous") or {}
+    if isinstance(previous, dict) and any(str(value).strip() for value in previous.values()):
+        lines += [
+            "",
+            "Esta es la versión anterior, que NO ha gustado. Propón otra distinta:",
+            f"  titular anterior: {str(previous.get('top') or '').strip()}",
+            f"  texto inferior anterior: {str(previous.get('bottom') or '').strip()}",
+            f"  caption anterior: {str(previous.get('caption') or '').strip()}",
+            "",
+            "No repitas el mismo titular ni el mismo enfoque: cambia el ángulo, "
+            "las palabras o el orden, manteniendo los datos reales de la publicación.",
+        ]
     return "\n".join(lines)
 
 

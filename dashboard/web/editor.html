@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor de tarjeta · EditImg</title>
+<link rel="stylesheet" href="/static/styles.css">
+<style>
+  body { padding-bottom: 40px; }
+  header.top .card-id { font-size: 12px; color: var(--muted); }
+  .editor-grid { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1080px) { .editor-grid { grid-template-columns: 1fr; } }
+  .sticky-preview { position: sticky; top: 84px; }
+  .regen-box { border: 1px solid var(--purple); border-radius: 10px; padding: 12px; background: rgba(139,61,255,.08); }
+  .regen-box h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; color: #d9bcff; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>Editor de tarjeta</h1>
+    <span class="card-id" id="card-id">cargando…</span>
+  </div>
+  <div class="spacer"></div>
+  <span id="clock-pill" class="pill"></span>
+  <button id="btn-back" class="ghost small">Volver a la bandeja</button>
+</header>
+
+<main>
+  <div id="error-box" class="panel" hidden>
+    <h2>No se pudo abrir la tarjeta</h2>
+    <p id="error-text" class="muted"></p>
+  </div>
+
+  <div id="editor-grid" class="editor-grid" hidden>
+
+    <!-- ===== Columna izquierda: previsualización ===== -->
+    <div class="sticky-preview">
+      <div class="panel">
+        <h2>Previsualización</h2>
+        <div id="preview" class="preview"><span class="muted">Cargando…</span></div>
+        <div id="preview-meta" class="small muted" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <a id="download-link" class="small" href="#" download>Descargar PNG</a>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Publicación original</h2>
+        <div id="tweet-info" class="small"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Entrega</h2>
+        <div class="row">
+          <div style="flex:1;min-width:150px">
+            <label for="f-delivery">Destino</label>
+            <select id="f-delivery">
+              <option value="auto">auto (Telegram si está configurado)</option>
+              <option value="telegram">Telegram (sendDocument)</option>
+              <option value="local">solo guardar el archivo</option>
+            </select>
+          </div>
+          <div style="align-self:flex-end">
+            <button id="btn-send" class="accent">Enviar</button>
+          </div>
+        </div>
+        <div id="send-result" class="small" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+    <!-- ===== Columna derecha: edición ===== -->
+    <div>
+      <div class="panel">
+        <h2>Texto de la tarjeta</h2>
+
+        <div class="regen-box" style="margin-bottom:14px">
+          <h3>Regenerar con IA</h3>
+          <p class="small muted" style="margin:0 0 8px">
+            Vuelve a generar <strong>solo el texto</strong>: el titular de arriba,
+            el texto de abajo y el caption. No toca las imágenes ni ningún otro
+            ajuste, y recompone la tarjeta automáticamente.
+          </p>
+          <div class="field">
+            <label for="f-instructions">Indicación opcional (por ejemplo: «más corto», «otro enfoque»)</label>
+            <input id="f-instructions" placeholder="Déjalo vacío para una propuesta distinta con el mismo criterio">
+          </div>
+          <div class="row">
+            <div style="flex:1;min-width:140px">
+              <label for="f-analysis">Proveedor</label>
+              <select id="f-analysis"></select>
+            </div>
+            <div style="align-self:flex-end">
+              <button id="btn-regenerate" class="primary">Regenerar texto y caption</button>
+            </div>
+          </div>
+          <div id="regen-info" class="small" style="margin-top:10px"></div>
+        </div>
+
+        <div class="field">
+          <label for="f-top">Titular de arriba (--top) · máx. 2 palabras con {PALABRA|COLOR}</label>
+          <textarea id="f-top"></textarea>
+        </div>
+        <div class="field">
+          <label for="f-bottom">Texto de abajo (--bottom)</label>
+          <textarea id="f-bottom"></textarea>
+        </div>
+        <div class="field">
+          <label for="f-caption">Caption (los hashtags van aquí, nunca dentro de la imagen)</label>
+          <textarea id="f-caption"></textarea>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Composición</h2>
+        <div class="row">
+          <div style="flex:1;min-width:120px">
+            <label for="f-format">Formato</label>
+            <select id="f-format">
+              <option value="auto">auto</option>
+              <option value="9:16">9:16 vertical</option>
+              <option value="1:1">1:1 cuadrado</option>
+              <option value="16:9">16:9 horizontal</option>
+              <option value="4:5">4:5</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:110px">
+            <label for="f-fit">Ajuste</label>
+            <select id="f-fit">
+              <option value="auto">auto</option>
+              <option value="cover">cover</option>
+              <option value="contain">contain</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:110px">
+            <label for="f-resolution">Resolución</label>
+            <select id="f-resolution">
+              <option value="4k">4k</option>
+              <option value="native">native</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <div style="flex:2;min-width:150px">
+            <label for="f-style">Estilo de collage</label>
+            <select id="f-style"></select>
+          </div>
+          <div style="flex:1;min-width:100px">
+            <label for="f-backend">Backend</label>
+            <select id="f-backend">
+              <option value="auto">auto</option>
+              <option value="cpu">cpu</option>
+              <option value="gpu">gpu</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-render" class="accent">Recomponer tarjeta</button>
+          <span id="render-info" class="small muted"></span>
+        </div>
+        <p class="small muted" style="margin-bottom:0">
+          Compone <code>bin/compose_image.py</code> con las mismas opciones que el
+          flujo de Telegram.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>Historial de entregas</h2>
+        <div id="deliveries" class="small muted">Sin entregas todavía.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/editor.js"></script>
+</body>
+</html>
