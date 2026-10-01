@@ -1193,7 +1193,9 @@ async function sendCard() {
  */
 function renderColoredText(markup) {
   const texto = String(markup || "");
-  const patron = /\{([^{}|]+)\|([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\}/g;
+  // La almohadilla es opcional: el modelo la escribía a veces ({PALABRA|#FF7A00})
+  // y sin aceptarla aquí el texto salía en crudo también en la vista previa.
+  const patron = /\{([^{}|]+)\|#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\}/g;
   let salida = "";
   let ultimo = 0;
   let coincidencia = patron.exec(texto);

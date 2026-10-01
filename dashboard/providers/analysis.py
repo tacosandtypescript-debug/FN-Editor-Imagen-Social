@@ -27,6 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .. import config
+from ..pipeline import cards as cards_pipeline
 from ..pipeline import repo
 from .base import Analysis, ProviderError, ProviderStatus
 
@@ -64,6 +65,9 @@ Reglas obligatorias:
 - Para resaltar una palabra, escríbela así: {PALABRA|HEX}
   Ejemplo de "top": FORTNITEMARES VUELVE CON {MAPA|FF7A00} NUEVO
 - Colores permitidos, solo estos: __PALETTE__.
+  Al escribir el marcado van **SIN la almohadilla**: {PALABRA|FF7A00}. Nunca
+  {PALABRA|#FF7A00}: la almohadilla impide que el color se aplique y las llaves
+  acaban impresas dentro de la imagen.
   Elige el color por contraste con el contenido; no repitas siempre el mismo.
 - NUNCA resaltes palabras funcionales: de, del, la, las, lo, los, el, un, una,
   unos, unas, a, al, ante, bajo, con, contra, desde, e, en, entre, hacia,
@@ -111,6 +115,9 @@ Reglas obligatorias:
 - COLOREA exactamente UNA palabra informativa en "top" y UNA en "bottom" de
   cada opción, usando {PALABRA|HEX}. No colorees palabras funcionales.
 - Colores permitidos, solo estos: __PALETTE__.
+  Al escribir el marcado van **SIN la almohadilla**: {PALABRA|FF7A00}. Nunca
+  {PALABRA|#FF7A00}: la almohadilla impide que el color se aplique y las llaves
+  acaban impresas dentro de la imagen.
 - No incluyas hashtags dentro de "top" ni de "bottom".
 - "hashtags" debe contener exactamente cinco etiquetas únicas en minúsculas y
   una debe ser #khetzalgg.
@@ -503,7 +510,10 @@ def sanitize_analysis(analysis: Analysis) -> Analysis:
     used_colors: list[str] = []
 
     def clean(text: str) -> str:
-        value = str(text or "")
+        # Se quita la almohadilla **antes** de buscar el marcado: `SEG` exige
+        # seis dígitos hex sin ella, así que `{PALABRA|#RRGGBB}` no coincidía,
+        # no se coloreaba y las llaves acababan dibujadas en la tarjeta.
+        value = cards_pipeline.normalise_markup(text)
 
         def replace(match: re.Match) -> str:
             word = match.group(1)

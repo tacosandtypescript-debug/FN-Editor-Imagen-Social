@@ -405,6 +405,49 @@ class CardParameterTests(unittest.TestCase):
         with self.assertRaises(cards_pipeline.CardError):
             cards_pipeline.normalise_params({"top": "{DE|FF0000} TIENDA", "bottom": "B"})
 
+    def test_markup_with_a_hash_is_normalised_instead_of_printed(self):
+        """Caso real: la tarjeta 8 imprimió «¿{TEASER|#FFD166} DE ONE PIECE?».
+
+        El prompt listaba la paleta como `#FFD166` y el marcado sin almohadilla,
+        así que el modelo copiaba la primera. El compositor exige seis dígitos
+        hex sin `#`: no reconocía el marcado, no coloreaba la palabra y dibujaba
+        las llaves dentro de la imagen.
+        """
+        clean = cards_pipeline.normalise_params(
+            {
+                "top": "NUEVA PESTAÑA, ¿{TEASER|#FFD166} DE ONE PIECE?",
+                "bottom": "Fortnite pregunta si es un {TEASER|#FFD166}",
+            }
+        )
+        self.assertEqual(clean["top"], "NUEVA PESTAÑA, ¿{TEASER|FFD166} DE ONE PIECE?")
+        self.assertEqual(clean["bottom"], "Fortnite pregunta si es un {TEASER|FFD166}")
+
+    def test_markup_that_the_composer_cannot_read_is_refused(self):
+        """Antes se ignoraba en silencio y las llaves se imprimían.
+
+        `validate_text_markup` no reconoce lo que no encaja con su patrón, así
+        que no lo valida y el compositor lo dibuja literal. Es mejor fallar con
+        un mensaje que decir qué arreglar que entregar una tarjeta con llaves.
+        """
+        for malo in ("{TEASER|rojo}", "{TEASER}", "{TEASER|#GGGGGG}", "{A|FFD166", "A|FFD166}"):
+            with self.subTest(malo=malo):
+                with self.assertRaises(cards_pipeline.CardError) as contexto:
+                    cards_pipeline.normalise_params({"top": malo, "bottom": "OK"})
+                self.assertIn("marcado", str(contexto.exception))
+
+    def test_the_sanitiser_also_strips_the_hash_and_keeps_the_colour(self):
+        analysis = analysis_providers.sanitize_analysis(
+            Analysis(
+                top="UN {PICO|#FFD166} NUEVO",
+                bottom="SIN {FUENTE|#8B3DFF} CONOCIDA",
+                provider="test",
+            )
+        )
+        self.assertIn("{PICO|FFD166}", analysis.top)
+        self.assertIn("{FUENTE|8B3DFF}", analysis.bottom)
+        self.assertNotIn("#", analysis.top)
+        self.assertNotIn("#", analysis.bottom)
+
     def test_defaults_are_filled_in(self):
         clean = cards_pipeline.normalise_params({"top": "A", "bottom": "B"})
         # Vertical por defecto: es como se publican. Antes era «auto» y el

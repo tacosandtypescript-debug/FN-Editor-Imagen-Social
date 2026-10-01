@@ -10,6 +10,7 @@ No reimplementa nada del compositor: construye el comando con
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -90,6 +91,39 @@ def text_fits(top: str, bottom: str, output_format: str = "9:16") -> tuple[bool,
     return True, ""
 
 
+#: Marcado del compositor con la almohadilla de más: `{PALABRA|#RRGGBB}`.
+#:
+#: El compositor reconoce `{PALABRA|RRGGBB}` y **solo** eso. Si llega con
+#: almohadilla no coincide, así que no se colorea nada y —lo grave— las llaves
+#: se dibujan tal cual dentro de la imagen. Ocurrió en real: la tarjeta 8 salió
+#: con «¿{TEASER|#FFD166} DE ONE PIECE?» impreso. El prompt listaba la paleta
+#: como `#FFD166` y el formato del marcado sin almohadilla, así que el modelo
+#: copiaba la primera. Se quita en lugar de confiar en que no vuelva a pasar.
+MARKUP_WITH_HASH = re.compile(r"\{([^{}|]+)\|#([0-9A-Fa-f]{6})\}")
+
+def normalise_markup(text: str) -> str:
+    """Quita la almohadilla del marcado de color para que el compositor lo lea."""
+    return MARKUP_WITH_HASH.sub(
+        lambda match: "{" + match.group(1) + "|" + match.group(2).upper() + "}",
+        str(text or ""),
+    )
+
+
+def _unrecognised_markup(text: str) -> str | None:
+    """Devuelve las llaves que el compositor dibujaría tal cual, si las hay.
+
+    Se quita primero el marcado válido y se mira si sobrevive alguna llave. Así
+    se detectan también las que están mal cerradas (`{A|FFD166`) o sueltas
+    (`}`), que con un patrón de marcado completo se escaparían.
+    """
+    resto = repo.compose_image().SEG.sub("", text)
+    if "{" not in resto and "}" not in resto:
+        return None
+    posiciones = [i for i in (resto.find("{"), resto.find("}")) if i != -1]
+    inicio = min(posiciones) if posiciones else 0
+    return resto[max(0, inicio - 20) : inicio + 40].strip()
+
+
 def normalise_params(params: dict) -> dict:
     """Valida y completa los parámetros de composición."""
     style = str(params.get("style") or config.Settings().default_style).strip().lower()
@@ -102,8 +136,8 @@ def normalise_params(params: dict) -> dict:
         params.get("format") or config.Settings().default_format
     ).strip().lower()
 
-    top = str(params.get("top") or "").strip()
-    bottom = str(params.get("bottom") or "").strip()
+    top = normalise_markup(str(params.get("top") or "")).strip()
+    bottom = normalise_markup(str(params.get("bottom") or "")).strip()
     if not top:
         raise CardError("el titular (top) no puede estar vacío")
     if not bottom:
@@ -126,6 +160,17 @@ def normalise_params(params: dict) -> dict:
         composer.validate_text_markup(top, bottom)
     except ValueError as exc:
         raise CardError(str(exc)) from exc
+
+    # Red de seguridad: `validate_text_markup` **ignora** en silencio lo que no
+    # reconoce, y el compositor lo dibujaría literalmente. Es mejor fallar aquí,
+    # con un mensaje que dice qué arreglar, que entregar una tarjeta con llaves.
+    for etiqueta, texto in (("titular", top), ("texto de abajo", bottom)):
+        sobrante = _unrecognised_markup(texto)
+        if sobrante:
+            raise CardError(
+                f"el marcado de color del {etiqueta} no es válido: {sobrante!r}. "
+                "Se escribe {PALABRA|RRGGBB}, sin la almohadilla"
+            )
 
     return {
         "top": top,
