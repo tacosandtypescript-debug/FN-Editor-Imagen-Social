@@ -364,6 +364,51 @@ con `?token=` que imprime al arrancar.
 
 ---
 
+## Dejarlo funcionando (y accesible desde fuera)
+
+Mientras el dashboard se arranca a mano, vive dentro de la sesión que lo lanzó:
+si esa ventana se cierra, el servidor muere. Eso deja sin acceso justo cuando
+más importa, que es estando fuera de casa.
+
+`dashboard/start-dashboard.cmd` es el lanzador: comprueba que el puerto esté
+libre, arranca el dashboard y va escribiendo en `dashboard/var/dashboard.log`.
+Se puede ejecutar con doble clic, y es lo que usa la tarea programada.
+
+La tarea **EditImg Dashboard** arranca el lanzador al iniciar sesión y lo
+reinicia hasta tres veces si falla. Se registra sin permisos de administrador:
+
+```powershell
+$cmd = "$PWD\dashboard\start-dashboard.cmd"
+Register-ScheduledTask -TaskName 'EditImg Dashboard' `
+  -Action (New-ScheduledTaskAction -Execute $cmd) `
+  -Trigger (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERNAME") `
+  -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+      -DontStopIfGoingOnBatteries -RestartCount 3 `
+      -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)) `
+  -Principal (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+      -LogonType Interactive -RunLevel Limited) -Force
+```
+
+Comprobar el estado y los últimos resultados:
+
+```powershell
+Get-ScheduledTask -TaskName 'EditImg Dashboard' | Select-Object TaskName, State
+Get-ScheduledTaskInfo -TaskName 'EditImg Dashboard'
+Get-Content dashboard\var\dashboard.log -Tail 30
+```
+
+**Dos cosas que hay que tener presentes para el acceso remoto:**
+
+- La tarea arranca al **iniciar sesión**. Si cierras la sesión de Windows (no
+  basta con bloquear la pantalla), el dashboard se detiene. **Bloquea, no
+  cierres sesión.** Para que sobreviva a un cierre de sesión haría falta
+  registrarla como «ejecutar tanto si el usuario ha iniciado sesión como si
+  no», y eso pide permisos de administrador.
+- El PC tiene que seguir encendido. En este equipo la suspensión con corriente
+  alterna está en **nunca**, que es lo correcto para esto.
+
+---
+
 ## Límites conocidos
 
 - **Publicaciones sin imágenes.** El compositor canónico necesita al menos una
