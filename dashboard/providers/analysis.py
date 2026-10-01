@@ -32,7 +32,7 @@ from .base import Analysis, ProviderError, ProviderStatus
 
 #: Paleta de reserva si el preset no se puede leer.
 FALLBACK_PALETTE = ("#8B3DFF", "#FF7A00", "#E83DFF", "#FFD166")
-DEFAULT_FORMATS = ("9:16", "1:1", "16:9", "4:5")
+DEFAULT_FORMATS = ("9:16", "1:1", "16:9")
 #: Relleno verificable cuando el modelo no propone cinco etiquetas.
 PAD_HASHTAGS = ("#fortnite", "#fortnitebr", "#epicgames", "#gaming")
 _BROWSER_LOCK = threading.Lock()
@@ -45,16 +45,20 @@ texto alrededor y sin bloques de código.
 Formato exacto de la respuesta:
 {
   "top": "TITULAR {PALABRA|HEX}",
-  "bottom": "CONTEXTO · DD/MM",
-  "caption": "titulo y fecha y hashtags",
+  "bottom": "CONTEXTO BREVE",
+  "caption": "titulo y hashtags",
   "hashtags": ["#khetzalgg", "#...", "#...", "#...", "#..."],
   "suggested_format": "9:16",
   "reasoning": "una frase"
 }
 
 Reglas obligatorias:
-- "top" es el titular: 3 a 12 palabras, en mayúsculas, sin punto final.
-- "bottom" es el contexto: breve, puede incluir la fecha con formato · DD/MM.
+- "top" es el titular: 3 a 12 palabras, en mayúsculas, sin punto final, y como
+  MÁXIMO 48 caracteres contando espacios.
+- "bottom" es un contexto breve basado en la publicación, de como MÁXIMO 52
+  caracteres contando espacios (unas 8 palabras). Son límites duros: el
+  compositor rechaza el texto que no entra y la composición falla. No rellenes
+  la plantilla con una etiqueta fija ni con una fecha inventada.
 - COLOREA SIEMPRE LAS PALABRAS: resalta exactamente UNA palabra en "top" y UNA
   palabra en "bottom". No es opcional.
 - Para resaltar una palabra, escríbela así: {PALABRA|HEX}
@@ -73,19 +77,64 @@ Reglas obligatorias:
 - No incluyas hashtags dentro de "top" ni de "bottom".
 - Escribe en español."""
 
+PROPOSAL_SYSTEM_PROMPT = """Eres el editor de tarjetas sociales de Fortnite del proyecto EditImg.
+Recibes el texto de una publicación de X y debes proponer tres alternativas
+editoriales para que una persona elija antes de componer la tarjeta. Respondes
+SIEMPRE con un único objeto JSON válido, sin texto alrededor y sin bloques de
+código.
 
-def build_system_prompt() -> str:
-    """Prompt del sistema con la paleta y los formatos resueltos.
+Formato exacto de la respuesta:
+{
+  "options": [
+    {"top": "TITULAR {PALABRA|HEX}", "bottom": "CONTEXTO BREVE"},
+    {"top": "OTRO TITULAR {PALABRA|HEX}", "bottom": "OTRO CONTEXTO"},
+    {"top": "TERCER TITULAR {PALABRA|HEX}", "bottom": "TERCER CONTEXTO"}
+  ],
+  "caption": "titulo y hashtags",
+  "hashtags": ["#khetzalgg", "#...", "#...", "#...", "#..."],
+  "suggested_format": "9:16",
+  "reasoning": "una frase"
+}
 
-    Se usa `replace` y no `str.format` a propósito: el prompt contiene un
-    ejemplo JSON con llaves literales, que `format` interpretaría como campos
-    y haría fallar la llamada.
-    """
+Reglas obligatorias:
+- "options" debe tener EXACTAMENTE tres objetos distintos. Cada objeto es un
+  par independiente de texto superior e inferior; no mezcles textos entre
+  opciones.
+- "top" es un titular de 3 a 12 palabras, en mayúsculas, sin punto final y de
+  como MÁXIMO 48 caracteres contando espacios.
+- "bottom" es un contexto basado en la publicación, de como MÁXIMO 52 caracteres
+  contando espacios (unas 8 palabras). Son límites duros: si te pasas, la
+  composición falla y la opción se descarta. No uses etiquetas fijas de
+  plantilla ni fechas inventadas.
+- Las tres opciones deben cambiar el enfoque o las palabras, sin inventar datos,
+  cifras ni nombres que no estén en la publicación.
+- COLOREA exactamente UNA palabra informativa en "top" y UNA en "bottom" de
+  cada opción, usando {PALABRA|HEX}. No colorees palabras funcionales.
+- Colores permitidos, solo estos: __PALETTE__.
+- No incluyas hashtags dentro de "top" ni de "bottom".
+- "hashtags" debe contener exactamente cinco etiquetas únicas en minúsculas y
+  una debe ser #khetzalgg.
+- "suggested_format" debe ser uno de: __FORMATS__.
+- Escribe en español."""
+
+
+def _resolve_prompt(template: str) -> str:
+    """Resuelve marcadores sin interpretar las llaves JSON del prompt."""
     return (
-        SYSTEM_PROMPT
+        template
         .replace("__PALETTE__", ", ".join(palette_colors()))
         .replace("__FORMATS__", ", ".join(DEFAULT_FORMATS))
     )
+
+
+def build_system_prompt() -> str:
+    """Prompt del sistema para una sola propuesta, ya resuelto."""
+    return _resolve_prompt(SYSTEM_PROMPT)
+
+
+def build_proposal_system_prompt() -> str:
+    """Prompt del sistema para las tres propuestas previas a la composición."""
+    return _resolve_prompt(PROPOSAL_SYSTEM_PROMPT)
 
 
 class ManualAnalysis:
@@ -422,6 +471,20 @@ def build_user_prompt(tweet: dict, palette: tuple[str, ...]) -> str:
             "No repitas el mismo titular ni el mismo enfoque: cambia el ángulo, "
             "las palabras o el orden, manteniendo los datos reales de la publicación.",
         ]
+
+    previous_options = tweet.get("previous_options") or []
+    if isinstance(previous_options, list) and previous_options:
+        lines += [
+            "",
+            "Estas opciones ya se mostraron y no convencieron. No repitas ninguno "
+            "de sus pares; genera tres pares nuevos:",
+        ]
+        for index, option in enumerate(previous_options[:6], 1):
+            if isinstance(option, dict):
+                lines.append(
+                    f"  opción {index}: {str(option.get('top') or '').strip()} / "
+                    f"{str(option.get('bottom') or '').strip()}"
+                )
     return "\n".join(lines)
 
 
@@ -510,11 +573,10 @@ def normalise_hashtags(hashtags, caption: str = "") -> list[str]:
     return [brand, *others[:4]]
 
 
-def analysis_from_payload(content: str, provider: str) -> Analysis:
-    """Extrae el JSON de la respuesta del modelo y lo sanea."""
-    data = _first_json_object(content)
+def analysis_from_dict(data: dict, provider: str = "") -> Analysis:
+    """Construye y sanea una propuesta recibida como diccionario."""
     if not isinstance(data, dict):
-        raise ProviderError("el modelo no devolvió un objeto JSON reconocible")
+        raise ProviderError("la propuesta no es un objeto JSON")
     analysis = Analysis(
         top=str(data.get("top") or "").strip(),
         bottom=str(data.get("bottom") or "").strip(),
@@ -523,12 +585,61 @@ def analysis_from_payload(content: str, provider: str) -> Analysis:
         suggested_format=str(data.get("suggested_format") or "").strip() or None,
         suggested_style=str(data.get("suggested_style") or "").strip() or None,
         reasoning=str(data.get("reasoning") or "").strip() or None,
-        provider=provider,
-        raw=content[:4000],
+        provider=str(data.get("provider") or provider or "").strip(),
+        raw=str(data.get("raw") or "")[:4000] or None,
     )
     if not analysis.top or not analysis.bottom:
         raise ProviderError("el modelo no devolvió titular y contexto")
     return sanitize_analysis(analysis)
+
+
+def analysis_from_payload(content: str, provider: str) -> Analysis:
+    """Extrae el JSON de la respuesta del modelo y lo sanea."""
+    data = _first_json_object(content)
+    if not isinstance(data, dict):
+        raise ProviderError("el modelo no devolvió un objeto JSON reconocible")
+    return analysis_from_dict({**data, "raw": content}, provider=provider)
+
+
+def proposals_from_payload(content: str, provider: str) -> dict:
+    """Extrae exactamente tres pares de textos y sanea cada uno."""
+    data = _first_json_object(content)
+    if not isinstance(data, dict):
+        raise ProviderError("el CLI no devolvió un objeto JSON reconocible")
+    raw_options = data.get("options")
+    if not isinstance(raw_options, list) or len(raw_options) != 3:
+        raise ProviderError("el CLI debe devolver exactamente tres opciones")
+
+    common = {
+        "caption": str(data.get("caption") or "").strip(),
+        "hashtags": list(data.get("hashtags") or []),
+        "suggested_format": str(data.get("suggested_format") or "").strip() or None,
+        "suggested_style": str(data.get("suggested_style") or "").strip() or None,
+        "reasoning": str(data.get("reasoning") or "").strip() or None,
+    }
+    options: list[dict] = []
+    pairs: set[tuple[str, str]] = set()
+    for raw_option in raw_options:
+        if not isinstance(raw_option, dict):
+            raise ProviderError("cada opción del CLI debe ser un objeto JSON")
+        option_data = {**common, **raw_option, "provider": provider, "raw": content}
+        analysis = analysis_from_dict(option_data, provider=provider)
+        pair = (analysis.top, analysis.bottom)
+        if pair in pairs:
+            raise ProviderError("el CLI devolvió opciones repetidas; deben ser tres distintas")
+        pairs.add(pair)
+        options.append(analysis.as_dict())
+
+    return {
+        "options": options,
+        "caption": options[0]["caption"],
+        "hashtags": options[0]["hashtags"],
+        "suggested_format": options[0]["suggested_format"],
+        "suggested_style": options[0].get("suggested_style"),
+        "reasoning": common["reasoning"],
+        "provider": provider,
+        "raw": content[:4000],
+    }
 
 
 def suggest_format(tweet: dict) -> str:
@@ -537,10 +648,8 @@ def suggest_format(tweet: dict) -> str:
 
 
 def date_context(tweet: dict) -> str:
-    posted = str(tweet.get("posted_at") or "").strip()
-    if len(posted) >= 10 and posted[4] == "-" and posted[7] == "-":
-        return f"NOTICIA FORTNITE · {posted[8:10]}/{posted[5:7]}"
-    return "NOTICIA FORTNITE"
+    """Fallback neutro: la fecha solo aparece si la propone el modelo."""
+    return "CONTEXTO PENDIENTE"
 
 
 # ----------------------------------------------------------------------
@@ -576,6 +685,30 @@ def analyse_tweet(tweet: dict, preferred: str | None = None) -> dict:
         result.reasoning = f"{chosen} no disponible ({status.detail}). {result.reasoning}"
         return sanitize_analysis(result).as_dict()
     return sanitize_analysis(provider.analyse(tweet)).as_dict()
+
+
+def propose_tweet(tweet: dict, preferred: str | None = None) -> dict:
+    """Genera tres pares para elegir antes de componer.
+
+    Este camino es deliberadamente estricto: si el proveedor elegido no puede
+    devolver tres propuestas, se informa del error en vez de componer una
+    tarjeta silenciosamente con un texto de relleno.
+    """
+    settings = config.Settings()
+    chosen = (preferred or settings.analysis_provider or "codex").strip().lower()
+    provider = build_provider(chosen)
+    status = provider.status()
+    if not status.available:
+        raise ProviderError(status.detail)
+    propose = getattr(provider, "propose", None)
+    if not callable(propose):
+        raise ProviderError(
+            f"el proveedor {chosen} no admite tres propuestas; usa el CLI de Codex"
+        )
+    result = propose(tweet)
+    if not isinstance(result, dict) or len(result.get("options") or []) != 3:
+        raise ProviderError("el proveedor no devolvió exactamente tres opciones")
+    return result
 
 
 def available_providers() -> list[ProviderStatus]:

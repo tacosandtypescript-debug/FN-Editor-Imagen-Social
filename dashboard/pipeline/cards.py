@@ -38,6 +38,58 @@ def allowed_styles() -> tuple[str, ...]:
     return ("auto",) + tuple(composer.STYLES)
 
 
+#: Configuración de preset ya leída, por formato. Se cachea porque la
+#: comprobación de encaje se hace tres veces seguidas (una por propuesta).
+_CFG_CACHE: dict[str, dict] = {}
+
+
+def canvas_config(output_format: str = "9:16") -> dict:
+    """Configuración del compositor para un formato, leída una sola vez."""
+    clave = str(output_format or "9:16").strip() or "9:16"
+    if clave not in _CFG_CACHE:
+        composer = repo.compose_image()
+        _CFG_CACHE[clave] = composer.load_cfg(config.preset_for_format(clave))
+    return _CFG_CACHE[clave]
+
+
+def text_fits(top: str, bottom: str, output_format: str = "9:16") -> tuple[bool, str]:
+    """Comprueba si el texto cabe en la tarjeta, con el compositor real.
+
+    Reutiliza `fit_block`, que es **la misma función** que usa
+    `bin/compose_image.py` para decidir si el texto cabe. No se reimplementa la
+    medida, así que el resultado no puede divergir del render.
+
+    Existe porque se dio el caso real de elegir una de las tres propuestas y que
+    la composición fallara después con «el texto no cabe en 1920px»: el modelo
+    había escrito una frase de más de noventa caracteres. Ahora una propuesta
+    que no encaja no llega a ofrecerse.
+    """
+    from PIL import Image, ImageDraw
+
+    composer = repo.compose_image()
+    try:
+        cfg = canvas_config(output_format)
+    except Exception:  # noqa: BLE001
+        # Si el preset no se puede leer, no es aquí donde debe fallar: la
+        # composición dará un error más preciso. Se deja pasar la propuesta.
+        return True, ""
+    try:
+        composer.validate_text_markup(top, bottom)
+    except ValueError as exc:
+        return False, str(exc)
+
+    ancho = int(cfg["canvas"]["width"])
+    alto = int(cfg["canvas"]["height"])
+    lienzo = Image.new("RGB", (ancho, alto))
+    dibujo = ImageDraw.Draw(lienzo)
+    for texto, etiqueta in ((top, "titular"), (bottom, "texto de abajo")):
+        try:
+            composer.fit_block(dibujo, texto, cfg)
+        except ValueError as exc:
+            return False, f"el {etiqueta} no cabe: {exc}"
+    return True, ""
+
+
 def normalise_params(params: dict) -> dict:
     """Valida y completa los parámetros de composición."""
     style = str(params.get("style") or config.Settings().default_style).strip().lower()

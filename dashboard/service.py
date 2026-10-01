@@ -165,12 +165,52 @@ class DashboardService:
         )
         return job.as_dict()
 
+    def enqueue_proposals(
+        self,
+        tweet_id: str,
+        provider: str | None = None,
+        instructions: str | None = None,
+        previous_options: list[dict] | None = None,
+    ) -> dict:
+        """Encola la generación de tres pares, sin componer todavía."""
+        tweet = self.get_tweet(tweet_id)
+        if not tweet.get("media"):
+            raise DashboardError(
+                "la publicación no tiene imágenes: el compositor necesita al menos una"
+            )
+        handle = tweet.get("author_handle") or tweet.get("source_handle") or ""
+        label = f"propuestas · @{handle} · {tweet_id}"
+
+        def trabajo() -> dict:
+            try:
+                return self.propose_tweet(
+                    tweet_id,
+                    provider=provider,
+                    instructions=instructions,
+                    previous_options=previous_options,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.store.log(
+                    f"Propuestas fallidas para {tweet_id}: {str(exc)[:400]}",
+                    level="error",
+                    tweet_id=tweet_id,
+                )
+                raise
+
+        job = self.jobs.submit("propuestas", label, trabajo)
+        self.store.log(
+            f"Encolada la generación de propuestas para {tweet_id} (trabajo {job.id})",
+            tweet_id=tweet_id,
+        )
+        return job.as_dict()
+
     def enqueue_process(
         self,
         tweet_id: str,
         params: dict | None = None,
         provider: str | None = None,
         force_analysis: bool = False,
+        proposal: dict | None = None,
     ) -> dict:
         """Encola el procesado de una publicación y responde al instante."""
         tweet = self.get_tweet(tweet_id)
@@ -184,7 +224,9 @@ class DashboardService:
 
         def trabajo() -> dict:
             try:
-                return self.process_tweet(tweet_id, params, provider, force_analysis)
+                return self.process_tweet(
+                    tweet_id, params, provider, force_analysis, proposal=proposal
+                )
             except Exception as exc:  # noqa: BLE001
                 # La publicación no debe quedarse en «procesando» para siempre.
                 message = str(exc)[:400]
@@ -613,22 +655,128 @@ class DashboardService:
         )
         return self.get_tweet(tweet_id)
 
+    def propose_tweet(
+        self,
+        tweet_id: str,
+        provider: str | None = None,
+        instructions: str | None = None,
+        previous_options: list[dict] | None = None,
+    ) -> dict:
+        """Genera hasta tres pares de texto sin guardar ni componer todavía.
+
+        Solo se devuelven pares que **caben** en la tarjeta. Se comprobó en real
+        que el modelo puede escribir un texto de abajo de noventa caracteres y
+        que la composición falla después, cuando el usuario ya había elegido; por
+        eso se mide con el propio compositor y, si no salen tres válidas, se pide
+        otro trío más corto antes de mostrar nada.
+        """
+        tweet = self.get_tweet(tweet_id)
+        if not tweet.get("media"):
+            raise DashboardError(
+                "la publicación no tiene imágenes: el compositor necesita al menos una"
+            )
+
+        formato = str(config.Settings().default_format or "9:16").strip() or "9:16"
+        if formato == "auto":
+            formato = "9:16"
+
+        prompt_tweet = dict(tweet)
+        if instructions and instructions.strip():
+            prompt_tweet["instructions"] = instructions.strip()
+        if previous_options:
+            prompt_tweet["previous_options"] = list(previous_options)
+
+        opciones: list[dict] = []
+        descartadas: list[str] = []
+        vistos: set[tuple[str, str]] = set()
+        result: dict = {}
+        result_provider = provider or "codex"
+
+        for intento in range(2):
+            try:
+                result = analysis_providers.propose_tweet(prompt_tweet, provider)
+            except Exception as exc:  # noqa: BLE001 - se muestra en la interfaz
+                message = str(exc)[:500]
+                self.store.log(
+                    f"Propuestas fallidas para {tweet_id}: {message}",
+                    level="error",
+                    tweet_id=tweet_id,
+                )
+                raise DashboardError(message) from exc
+
+            result_provider = result.get("provider") or provider or "codex"
+            for cruda in result.get("options") or []:
+                try:
+                    opcion = analysis_providers.analysis_from_dict(
+                        cruda, provider=result_provider
+                    ).as_dict()
+                except Exception:  # noqa: BLE001 - una opción rota no tira las demás
+                    continue
+                clave = (opcion["top"], opcion["bottom"])
+                if clave in vistos:
+                    continue
+                vistos.add(clave)
+                cabe, motivo = cards_pipeline.text_fits(
+                    opcion["top"], opcion["bottom"], formato
+                )
+                if not cabe:
+                    descartadas.append(f"{opcion['bottom'][:48]}… ({motivo})")
+                    continue
+                opciones.append(opcion)
+
+            if len(opciones) >= 3:
+                break
+            # Faltan opciones: el trío anterior se pasó de largo. Se pide otro
+            # más corto sin repetir lo ya visto.
+            prompt_tweet["previous_options"] = [
+                {"top": o["top"], "bottom": o["bottom"]} for o in opciones
+            ] + list(previous_options or [])
+            prompt_tweet["instructions"] = (
+                "El texto de abajo no cabía en la tarjeta. Genera tres pares "
+                "nuevos y claros, con MÁXIMO 52 caracteres en \"bottom\" y 48 en "
+                "\"top\" contando espacios."
+            )
+
+        if descartadas:
+            self.store.log(
+                f"Descartadas {len(descartadas)} propuesta(s) que no cabían en la "
+                f"tarjeta {formato}: " + " | ".join(descartadas[:3]),
+                tweet_id=tweet_id,
+            )
+        if not opciones:
+            raise DashboardError(
+                "ninguna propuesta cabe en la tarjeta; prueba a pedir otras o "
+                "acorta el texto a mano en el editor"
+            )
+
+        primera = opciones[0]
+        return {
+            "tweet_id": tweet_id,
+            "options": opciones[:3],
+            "caption": result.get("caption") or primera.get("caption") or "",
+            "hashtags": result.get("hashtags") or primera.get("hashtags") or [],
+            "suggested_format": result.get("suggested_format") or primera.get("suggested_format"),
+            "suggested_style": result.get("suggested_style") or primera.get("suggested_style"),
+            "reasoning": result.get("reasoning") or "",
+            "provider": result_provider,
+            "discarded": len(descartadas),
+            "format": formato,
+        }
+
     def process_tweet(
         self,
         tweet_id: str,
         params: dict | None = None,
         provider: str | None = None,
         force_analysis: bool = False,
+        proposal: dict | None = None,
     ) -> dict:
-        """Prepara una publicación de principio a fin, en un solo paso.
+        """Compone una publicación, usando el par elegido si se recibió.
 
-        Es lo que dispara el botón «Procesar»: analiza si todavía no hay
-        análisis, descarga los medios y compone la tarjeta. Deja el resultado
-        listo para abrir en el editor independiente.
-
-        El análisis se rehace cuando el guardado es de relleno (`manual`) o de
-        otro proveedor distinto del configurado: si no, un análisis antiguo
-        hecho sin IA impediría que ChatGPT redactara los textos y los colores.
+        El flujo nuevo llama primero a :meth:`propose_tweet`; esta función solo
+        se ejecuta después de que el usuario confirme una de las tres opciones.
+        Se conserva el camino antiguo sin ``proposal`` para compatibilidad con
+        el editor y con scripts existentes.
         """
         tweet = self.get_tweet(tweet_id)
         if not tweet.get("media"):
@@ -637,22 +785,49 @@ class DashboardService:
             )
 
         done: list[str] = []
-        existing = tweet.get("analysis") or {}
-        current = str(existing.get("provider") or "").strip().lower()
-        configured = (
-            provider or config.Settings().analysis_provider or ""
-        ).strip().lower()
-        needs_analysis = (
-            force_analysis
-            or not existing
-            or current in {"", "manual"}
-            or (configured and current != configured)
-        )
-        if needs_analysis:
-            self.analyse(tweet_id, provider)
-            done.append("análisis de texto")
+        if proposal is not None:
+            try:
+                selected = analysis_providers.analysis_from_dict(
+                    proposal,
+                    provider=str(proposal.get("provider") or provider or "codex"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise DashboardError(f"la opción elegida no es válida: {exc}") from exc
+            selected_data = selected.as_dict()
+            self.store.update_tweet(
+                tweet_id,
+                analysis_json=selected_data,
+                status="seleccionado",
+                status_detail=None,
+            )
+            selected_params = dict(params or {})
+            selected_params.update(
+                {
+                    "top": selected_data["top"],
+                    "bottom": selected_data["bottom"],
+                    "caption": selected_data["caption"],
+                    "hashtags": selected_data["hashtags"],
+                }
+            )
+            params = selected_params
+            done.append("par elegido")
         else:
-            done.append("análisis ya existente")
+            existing = tweet.get("analysis") or {}
+            current = str(existing.get("provider") or "").strip().lower()
+            configured = (
+                provider or config.Settings().analysis_provider or ""
+            ).strip().lower()
+            needs_analysis = (
+                force_analysis
+                or not existing
+                or current in {"", "manual"}
+                or (configured and current != configured)
+            )
+            if needs_analysis:
+                self.analyse(tweet_id, provider)
+                done.append("análisis de texto")
+            else:
+                done.append("análisis ya existente")
 
         card = self.prepare_card(tweet_id, params)
         done.append("descarga de medios y composición")
@@ -1021,7 +1196,5 @@ def _fallback_title(tweet: dict) -> str:
 
 
 def _fallback_context(tweet: dict) -> str:
-    posted = str(tweet.get("posted_at") or "")
-    if len(posted) >= 10 and posted[4] == "-":
-        return f"NOTICIA FORTNITE · {posted[8:10]}/{posted[5:7]}"
-    return "NOTICIA FORTNITE"
+    """Texto neutro mientras el usuario todavía no ha elegido una propuesta."""
+    return "CONTEXTO PENDIENTE"

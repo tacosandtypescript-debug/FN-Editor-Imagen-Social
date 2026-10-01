@@ -111,6 +111,32 @@ El prompt del sistema aplica las reglas del repositorio: titular de 3 a 12
 palabras, color solo en palabras con carga semántica, como máximo dos acentos y
 cinco hashtags únicos incluyendo `#khetzalgg`.
 
+**Sin etiquetas de plantilla en el texto de abajo.** El prompt llegó a mostrar
+`"bottom": "CONTEXTO · DD/MM"` como ejemplo, y el modelo copiaba ese patrón: en
+las tarjetas reales apareció `PRIMERA ACTUALIZACIÓN · 01/10` y otros cuatro
+textos acababan igual en `· DD/MM`. Ahora el ejemplo no lleva fecha, la regla
+prohíbe expresamente las etiquetas fijas y las fechas inventadas, y el texto de
+reserva es `CONTEXTO PENDIENTE` en lugar de `NOTICIA FORTNITE · DD/MM`.
+
+**La respuesta del CLI debe ser JSON válido.** Si llega mal formado —texto
+alrededor, markdown o llaves sin cerrar— se reintenta **una vez** con una
+indicación explícita antes de mostrar el error. También se reintenta cuando el
+JSON es correcto pero no cumple el contrato (por ejemplo, si no trae tres pares
+distintos).
+
+**Ninguna propuesta ofrecida puede fallar al componer.** El compositor tiene un
+límite duro: el texto debe caber en 960 px, que en la práctica son unos 55
+caracteres en el texto de abajo y unos 50 en el titular. Se midió en real que el
+modelo llegaba a escribir 90 caracteres, y que la composición fallaba **después**
+de que el usuario eligiera. Por eso cada propuesta se mide antes de mostrarla con
+`fit_block` —la misma función que usa `bin/compose_image.py`, no una copia— y las
+que no caben se descartan. Si quedan menos de tres, se pide otro trío más corto;
+si solo cabe una, se ofrece una. El panel avisa de cuántas se descartaron.
+
+**Los límites van escritos en el prompt**: máximo 48 caracteres en `top` y 52 en
+`bottom`. Son algo más estrictos que el límite medido, para que el margen cubra
+letras anchas y mayúsculas acentuadas.
+
 ### Entrega
 
 | Proveedor | Requiere |
@@ -299,11 +325,18 @@ desfase detectado y de dónde sale el huso.
    muestra cuenta, autor real (los reposts se atribuyen bien), texto,
    miniaturas, **hora relativa** (`hace 2 h 15 min`) con la fecha exacta al lado,
    enlace original y estado.
-2. **Procesar.** Un botón por publicación que hace el trabajo completo:
-   análisis del texto, descarga de medios y composición de la tarjeta.
-3. **Abrir editor.** Al terminar aparece al lado el botón que abre el **editor
+2. **Procesar.** Envía el texto de la publicación al CLI de ChatGPT y **no
+   compone nada todavía**: espera a que devuelva **tres pares** de titular y
+   texto de abajo, ya saneados y con los colores de las palabras.
+3. **Elegir el texto.** Aparece un panel con las tres alternativas. La primera
+   queda seleccionada por defecto; se cambia con un toque. Si ninguna convence,
+   **«Generar otras 3 opciones»** pide otro trío, enviando al modelo los pares
+   anteriores para que no los repita. Solo al pulsar **«Confirmar y procesar»**
+   se descarga el material y se compone la tarjeta con el par elegido, que queda
+   guardado como análisis de la publicación.
+4. **Abrir editor.** Al terminar aparece al lado el botón que abre el **editor
    independiente** en su propia pestaña.
-4. **Editor independiente** (`/editor.html?card=N`). Previsualización grande,
+5. **Editor independiente** (`/editor.html?card=N`). Previsualización grande,
    edición de texto y composición, entrega e historial. Lo único que se puede
    **regenerar con IA** es el texto —titular de arriba, texto de abajo y
    caption—: no toca las imágenes ni ningún otro ajuste, y recompone la tarjeta

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -29,6 +29,33 @@
 </nav>
 
 <main>
+
+  <!-- ============ PROPUESTAS ============
+       Va antes que la bandeja a propósito. Al final de una lista larga el
+       panel quedaba pegado al fondo de la página y los botones de acción
+       («Generar otras 3 opciones», «Confirmar y procesar») caían por debajo
+       del pliegue: había que bajar para poder decidir. -->
+  <section id="proposal-panel" class="panel proposal-panel" hidden aria-live="polite">
+    <div class="row">
+      <div>
+        <h2>Elige el texto de la tarjeta</h2>
+        <p id="proposal-tweet" class="small muted" style="margin:0"></p>
+      </div>
+      <span class="spacer"></span>
+      <button id="btn-cancel-proposals" class="ghost small">Cerrar</button>
+    </div>
+    <p class="small muted">
+      La primera opción queda seleccionada por defecto. Pulsa otra para cambiarla;
+      la imagen solo se compondrá cuando confirmes.
+    </p>
+    <div id="proposal-options" class="proposal-options" role="radiogroup" aria-label="Opciones de texto"></div>
+    <div class="row proposal-actions">
+      <button id="btn-more-proposals" class="ghost">Generar otras 3 opciones</button>
+      <span class="spacer"></span>
+      <button id="btn-confirm-proposal" class="primary">Confirmar y procesar</button>
+    </div>
+    <div id="proposal-info" class="small muted" style="margin-top:10px"></div>
+  </section>
 
   <!-- ============ BANDEJA ============ -->
   <section id="tab-inbox">
@@ -91,7 +118,7 @@
         Aquí quedan todas las tarjetas que ya creaste, aunque hayan salido de la
         bandeja de pendientes. Desde aquí puedes <strong>abrir el editor</strong>,
         <strong>volver a generar el texto y los colores</strong> con tu
-        suscripción, <strong>enviarlas a Telegram</strong> o descargarlas.
+        suscripción, <strong>enviarlas a Telegram</strong> o descargarlas. Al pulsar «Procesar» primero verás tres pares de textos generados por el CLI de ChatGPT y elegirás uno antes de componer.
       </p>
       <div class="row">
         <button id="btn-refresh-cards" class="ghost small">Actualizar</button>
@@ -258,7 +285,7 @@
         instalado y con sesión iniciada en este equipo: consume tu
         <strong>suscripción de ChatGPT</strong>, no una clave de API de pago, y
         devuelve JSON validado. Genera el titular de arriba, el texto de abajo y
-        <strong>los colores de las palabras</strong>.
+        <strong>los colores de las palabras</strong> y tres alternativas de par superior/inferior para elegir antes de componer.
       </p>
       <div id="chatgpt-state" class="row" style="margin-bottom:12px"></div>
       <div class="row">

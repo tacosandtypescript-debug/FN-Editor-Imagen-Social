@@ -41,6 +41,7 @@ ROUTES = (
     ("GET", re.compile(r"^/api/tweets/(\d+)$"), "get_tweet"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/status$"), "post_tweet_status"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/analyze$"), "post_tweet_analyze"),
+    ("POST", re.compile(r"^/api/tweets/(\d+)/proposals$"), "post_tweet_proposals"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/process$"), "post_tweet_process"),
     ("POST", re.compile(r"^/api/tweets/(\d+)/card$"), "post_tweet_card"),
     ("GET", re.compile(r"^/api/cards$"), "get_cards"),
@@ -370,23 +371,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
         card = self.service.prepare_card(tweet_id, payload.get("params") or {})
         self._send_json({"card": card}, status=201)
 
-    def post_tweet_process(self, query, tweet_id: str) -> None:
-        """Botón «Procesar»: análisis, descarga y composición.
+    def post_tweet_proposals(self, query, tweet_id: str) -> None:
+        """Genera tres propuestas JSON antes de descargar y componer."""
+        payload = self._read_json()
+        provider = payload.get("provider") or None
+        instructions = payload.get("instructions") or None
+        previous_options = payload.get("previous_options") or None
+        if payload.get("sync"):
+            self._send_json(
+                self.service.propose_tweet(
+                    tweet_id,
+                    provider=provider,
+                    instructions=instructions,
+                    previous_options=previous_options,
+                )
+            )
+            return
+        job = self.service.enqueue_proposals(
+            tweet_id,
+            provider=provider,
+            instructions=instructions,
+            previous_options=previous_options,
+        )
+        self._send_json({"job": job, "queued": True}, status=202)
 
-        Se atiende en segundo plano y responde al instante. El trabajo tarda
-        entre treinta y sesenta segundos (Codex más composición 4K); mantener
-        al navegador esperando hacía que, al cortarse la petición, la interfaz
-        mostrara un fallo aunque el servidor hubiera terminado bien. Con
-        `sync` se puede forzar el camino directo, útil para pruebas.
-        """
+    def post_tweet_process(self, query, tweet_id: str) -> None:
+        """Confirma un par elegido y compone la tarjeta."""
         payload = self._read_json()
         params = payload.get("params") or None
         provider = payload.get("provider") or None
+        proposal = payload.get("proposal") or payload.get("selection") or None
         force = bool(payload.get("force_analysis"))
         if payload.get("sync"):
-            self._send_json(self.service.process_tweet(tweet_id, params, provider, force), status=201)
+            self._send_json(
+                self.service.process_tweet(
+                    tweet_id, params, provider, force, proposal=proposal
+                ),
+                status=201,
+            )
             return
-        job = self.service.enqueue_process(tweet_id, params, provider, force)
+        job = self.service.enqueue_process(
+            tweet_id, params, provider, force, proposal=proposal
+        )
         self._send_json({"job": job, "queued": True}, status=202)
 
     def get_jobs(self, query, *groups) -> None:

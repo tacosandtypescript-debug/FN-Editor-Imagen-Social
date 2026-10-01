@@ -57,6 +57,39 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
+#: Contrato estricto para el paso previo a la composición.
+PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "options": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "top": {"type": "string"},
+                    "bottom": {"type": "string"},
+                },
+                "required": ["top", "bottom"],
+                "additionalProperties": False,
+            },
+        },
+        "caption": {"type": "string"},
+        "hashtags": {"type": "array", "items": {"type": "string"}},
+        "suggested_format": {"type": "string"},
+        "reasoning": {"type": "string"},
+    },
+    "required": [
+        "options",
+        "caption",
+        "hashtags",
+        "suggested_format",
+        "reasoning",
+    ],
+    "additionalProperties": False,
+}
+
 #: Rutas donde el instalador de Codex deja el ejecutable.
 _SEARCH_GLOBS = (
     r"%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe",
@@ -161,19 +194,51 @@ class CodexCliAnalysis:
 
     # ------------------------------------------------------------------
     def analyse(self, tweet: dict) -> Analysis:
+        """Obtiene una sola propuesta para los caminos antiguos del editor."""
         from . import analysis as analysis_module
-
-        status = self.status()
-        if not status.available:
-            raise ProviderError(status.detail)
-        executable = find_codex_executable()
-        assert executable is not None  # lo garantiza status()
 
         prompt = (
             analysis_module.build_system_prompt()
             + "\n\n--- PUBLICACIÓN ---\n"
             + analysis_module.build_user_prompt(tweet, analysis_module.palette_colors())
         )
+        result, elapsed = self._run_json(
+            prompt, OUTPUT_SCHEMA, self._parse, "análisis"
+        )
+        if result.reasoning:
+            result.reasoning = f"{result.reasoning} · {elapsed:.0f} s"
+        else:
+            result.reasoning = f"CLI de Codex en {elapsed:.0f} s"
+        return result
+
+    def propose(self, tweet: dict) -> dict:
+        """Obtiene tres pares para que el usuario elija antes de componer."""
+        from . import analysis as analysis_module
+
+        prompt = (
+            analysis_module.build_proposal_system_prompt()
+            + "\n\n--- PUBLICACIÓN ---\n"
+            + analysis_module.build_user_prompt(tweet, analysis_module.palette_colors())
+            + "\n\nDevuelve exactamente tres opciones diferentes."
+        )
+        result, elapsed = self._run_json(
+            prompt,
+            PROPOSAL_SCHEMA,
+            lambda raw: analysis_module.proposals_from_payload(raw, self.name),
+            "propuestas",
+        )
+        result["reasoning"] = (
+            f"{result.get('reasoning') or 'Tres opciones listas'} · {elapsed:.0f} s"
+        )
+        return result
+
+    def _run_json(self, prompt, schema, parser, label: str):
+        """Ejecuta Codex y reintenta una vez si la salida no es JSON válido."""
+        status = self.status()
+        if not status.available:
+            raise ProviderError(status.detail)
+        executable = find_codex_executable()
+        assert executable is not None  # lo garantiza status()
 
         # `ignore_cleanup_errors` porque en Windows el proceso de Codex puede
         # dejar un manejador abierto sobre su directorio de trabajo y el borrado
@@ -184,75 +249,73 @@ class CodexCliAnalysis:
             work = Path(temporary)
             schema_file = work / "schema.json"
             output_file = work / "salida.json"
-            schema_file.write_text(
-                json.dumps(OUTPUT_SCHEMA, ensure_ascii=False), encoding="utf-8"
-            )
-
-            command = [executable, "exec"]
-            command += ["--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check"]
-            command += ["-C", str(work)]
-            command += ["-o", str(output_file), "--output-schema", str(schema_file)]
-            if self.settings.codex_model:
-                command += ["--model", self.settings.codex_model]
-            command.append(prompt)
-
+            schema_file.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
             started = time.time()
-            try:
-                completed = subprocess.run(  # noqa: S603 - ejecutable propio del usuario
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.settings.codex_timeout_seconds,
-                    cwd=str(work),
-                    creationflags=_no_window_flags(),
+            ultimo_error: ProviderError | None = None
+
+            for attempt in range(2):
+                output_file.unlink(missing_ok=True)
+                command = [executable, "exec"]
+                command += ["--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check"]
+                command += ["-C", str(work)]
+                command += ["-o", str(output_file), "--output-schema", str(schema_file)]
+                if self.settings.codex_model:
+                    command += ["--model", self.settings.codex_model]
+                actual_prompt = prompt if attempt == 0 else prompt + (
+                    "\n\nREINTENTO: la respuesta anterior no era un JSON válido. "
+                    "Responde ahora únicamente con el objeto JSON exacto del esquema, "
+                    "sin markdown ni texto adicional."
                 )
-            except subprocess.TimeoutExpired as exc:
-                raise ProviderError(
-                    f"el CLI de Codex tardó más de {self.settings.codex_timeout_seconds} s; "
-                    "aumenta DASHBOARD_CODEX_TIMEOUT"
-                ) from exc
-            except OSError as exc:
-                raise ProviderError(f"no se pudo ejecutar el CLI de Codex: {exc}") from exc
+                command.append(actual_prompt)
 
-            elapsed = time.time() - started
-            raw = ""
-            if output_file.is_file():
-                raw = output_file.read_text(encoding="utf-8", errors="replace").strip()
+                try:
+                    completed = subprocess.run(  # noqa: S603 - ejecutable del usuario
+                        command,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=self.settings.codex_timeout_seconds,
+                        cwd=str(work),
+                        creationflags=_no_window_flags(),
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise ProviderError(
+                        f"el CLI de Codex tardó más de {self.settings.codex_timeout_seconds} s; "
+                        "aumenta DASHBOARD_CODEX_TIMEOUT"
+                    ) from exc
+                except OSError as exc:
+                    raise ProviderError(f"no se pudo ejecutar el CLI de Codex: {exc}") from exc
 
-            if completed.returncode != 0 and not raw:
-                raise ProviderError(
-                    "el CLI de Codex falló: "
-                    + _describe_failure(completed.stderr, completed.stdout, completed.returncode)
-                )
-            if not raw:
-                raise ProviderError("el CLI de Codex no devolvió ningún mensaje final")
+                raw = ""
+                if output_file.is_file():
+                    raw = output_file.read_text(encoding="utf-8", errors="replace").strip()
+                if completed.returncode != 0 and not raw:
+                    raise ProviderError(
+                        "el CLI de Codex falló: "
+                        + _describe_failure(completed.stderr, completed.stdout, completed.returncode)
+                    )
+                if not raw:
+                    raise ProviderError("el CLI de Codex no devolvió ningún mensaje final")
 
-        analysis = self._parse(raw)
-        if analysis.reasoning:
-            analysis.reasoning = f"{analysis.reasoning} · {elapsed:.0f} s"
-        else:
-            analysis.reasoning = f"CLI de Codex en {elapsed:.0f} s"
-        return analysis
+                try:
+                    return parser(raw), time.time() - started
+                except ProviderError as exc:
+                    # El fallo se guarda y se reintenta. Se informa al final, ya
+                    # con el resultado del reintento: si el modelo acertó a la
+                    # segunda, el usuario no debe ver ningún error.
+                    ultimo_error = exc
+
+            raise ProviderError(
+                f"el CLI de Codex devolvió JSON inválido para {label}; "
+                f"se reintentó una vez: {ultimo_error}"
+            ) from ultimo_error
 
     # ------------------------------------------------------------------
     def _parse(self, raw: str) -> Analysis:
         from . import analysis as analysis_module
 
-        data = analysis_module._first_json_object(raw)  # noqa: SLF001 - mismo paquete
-        if not isinstance(data, dict):
-            raise ProviderError("el CLI de Codex no devolvió un objeto JSON reconocible")
-        return analysis_module.Analysis(
-            top=str(data.get("top") or "").strip(),
-            bottom=str(data.get("bottom") or "").strip(),
-            caption=str(data.get("caption") or "").strip(),
-            hashtags=list(data.get("hashtags") or []),
-            suggested_format=str(data.get("suggested_format") or "").strip() or None,
-            reasoning=str(data.get("reasoning") or "").strip() or None,
-            provider=self.name,
-            raw=raw[:4000],
-        )
+        return analysis_module.analysis_from_payload(raw, provider=self.name)
 
 
 def _no_window_flags() -> int:

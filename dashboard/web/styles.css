@@ -257,7 +257,27 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 .format-row select { flex: 1 1 130px; min-width: 0; }
 .format-row button { flex: 0 0 auto; }
 
+/* Selección previa: las tres alternativas se pueden cambiar con un toque. */
+.proposal-panel { border-color: var(--purple); background: linear-gradient(180deg, rgba(139,61,255,.14), var(--panel)); }
+.proposal-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.proposal-option {
+  display: flex; flex-direction: column; gap: 8px; text-align: left;
+  min-height: 132px; padding: 13px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--panel-2); color: var(--text);
+  cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+.proposal-option:hover { border-color: var(--purple); filter: brightness(1.08); }
+.proposal-option:active { transform: translateY(1px); }
+.proposal-option.selected { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255,209,102,.28); }
+.proposal-option .option-number { color: var(--gold); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+.proposal-option .option-top { font-weight: 800; line-height: 1.2; }
+.proposal-option .option-bottom { color: var(--muted); line-height: 1.25; }
+.proposal-actions { margin-top: 12px; }
+
 @media (max-width: 700px) {
+  .proposal-options { grid-template-columns: 1fr; }
+  .proposal-option { min-height: 0; }
+  .proposal-actions button { flex: 1 1 100%; }
   .format-row select { flex: 1 1 100%; }
   .format-row button { flex: 1 1 100%; }
 }

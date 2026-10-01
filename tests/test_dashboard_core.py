@@ -5,6 +5,7 @@ constantes reales del compositor canónico.
 """
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -287,6 +288,80 @@ class PromptTests(unittest.TestCase):
         self.assertIn('una palabra en "bottom"', prompt)
         # Y sigue prohibiendo colorear palabras funcionales.
         self.assertIn("nunca resaltes palabras funcionales", prompt)
+
+    def test_proposal_prompt_requests_three_options_without_a_fixed_template_label(self):
+        prompt = analysis_providers.build_proposal_system_prompt()
+        # Se compara sin saltos de línea: el prompt se ajusta a 79 columnas y
+        # una frase puede quedar partida en dos.
+        plano = re.sub(r"\s+", " ", prompt).lower()
+        self.assertNotIn("__PALETTE__", prompt)
+        self.assertNotIn("__FORMATS__", prompt)
+        self.assertIn('"options"', prompt)
+        self.assertIn("exactamente tres", plano)
+        self.assertIn("fijas de plantilla", plano)
+        self.assertNotIn("PRIMERA ACTUALIZACIÓN · 01/1", prompt)
+
+    def test_prompts_state_the_character_limits_the_composer_enforces(self):
+        """Sin límite explícito el modelo escribía frases que no cabían.
+
+        Ocurrió en real: una propuesta de 90 caracteres se eligió y la
+        composición falló después con «el texto no cabe en 1920px». El límite
+        medido con el propio compositor es de unos 55 caracteres.
+        """
+        for prompt in (
+            analysis_providers.build_proposal_system_prompt(),
+            analysis_providers.build_system_prompt(),
+        ):
+            with self.subTest(primeras=prompt[:40]):
+                plano = re.sub(r"\s+", " ", prompt).lower()
+                self.assertIn("48 caracteres", plano)
+                self.assertIn("52 caracteres", plano)
+
+    def test_the_composer_confirms_which_texts_fit(self):
+        """`text_fits` reutiliza `fit_block`, así que no puede divergir."""
+        corto, motivo = cards_pipeline.text_fits("TITULAR CORTO", "CONTEXTO CORTO", "9:16")
+        self.assertTrue(corto, motivo)
+
+        # El texto real que hizo fallar la composición.
+        largo, motivo = cards_pipeline.text_fits(
+            "CRYSTALLIZED {PUNISHER|8B3DFF}: UN PICO SIN RUTA REVELADA",
+            "Su llegada está confirmada en v42.30, aunque la {OBTENCIÓN|FF7A00} "
+            "permanece sin identificar.",
+            "9:16",
+        )
+        self.assertFalse(largo)
+        self.assertIn("texto de abajo", motivo)
+        self.assertIn("no cabe", motivo)
+
+    def test_text_fits_rejects_markup_the_composer_would_reject(self):
+        cabe, motivo = cards_pipeline.text_fits("A {DE|FF7A00} B", "CONTEXTO", "9:16")
+        self.assertFalse(cabe)
+        self.assertTrue(motivo)
+
+    def test_three_proposals_are_parsed_and_sanitised(self):
+        raw = json.dumps(
+            {
+                "options": [
+                    {"top": "UNO {MAPA|FF7A00}", "bottom": "A {NUEVO|8B3DFF}"},
+                    {"top": "DOS {MODO|FF39D7}", "bottom": "B {CAMBIO|42E8FF}"},
+                    {"top": "TRES {NOVEDAD|FFD166}", "bottom": "C {FECHA|B84DFF}"},
+                ],
+                "caption": "caption",
+                "hashtags": ["#fortnite"],
+                "suggested_format": "9:16",
+                "reasoning": "tres",
+            },
+            ensure_ascii=False,
+        )
+        result = analysis_providers.proposals_from_payload(raw, provider="test")
+        self.assertEqual(len(result["options"]), 3)
+        self.assertEqual(result["options"][0]["provider"], "test")
+
+    def test_proposal_json_must_contain_exactly_three_options(self):
+        with self.assertRaises(analysis_providers.ProviderError):
+            analysis_providers.proposals_from_payload(
+                '{"options": [{"top": "A", "bottom": "B"}]}', provider="test"
+            )
 
     def test_prompt_asks_to_change_the_text_when_regenerating(self):
         tweet = {

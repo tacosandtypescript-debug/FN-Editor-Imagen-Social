@@ -177,6 +177,54 @@ class CommandLineTests(unittest.TestCase):
 
         return runner
 
+    def test_codex_returns_three_proposals(self):
+        codex_cli.subprocess.run = self._fake_run(
+            {
+                "options": [
+                    {"top": "UNO {MAPA|FF7A00}", "bottom": "A {NUEVO|8B3DFF}"},
+                    {"top": "DOS {MODO|FF39D7}", "bottom": "B {CAMBIO|42E8FF}"},
+                    {"top": "TRES {NOVEDAD|FFD166}", "bottom": "C {FECHA|B84DFF}"},
+                ],
+                "caption": "caption",
+                "hashtags": ["#fortnite"],
+                "suggested_format": "9:16",
+                "reasoning": "tres opciones",
+            }
+        )
+        result = codex_cli.CodexCliAnalysis().propose({"text": "x"})
+        self.assertEqual(len(result["options"]), 3)
+        self.assertTrue(result["options"][1]["top"].startswith("DOS {MODO|"))
+        command = self.seen["command"]
+        self.assertIn("--output-schema", command)
+        self.assertTrue(command[command.index("--output-schema") + 1].endswith("schema.json"))
+        self.assertIn("tres", command[-1].lower())
+
+    def test_malformed_proposal_json_is_retried_once(self):
+        calls = []
+        valid = {
+            "options": [
+                {"top": "UNO", "bottom": "A"},
+                {"top": "DOS", "bottom": "B"},
+                {"top": "TRES", "bottom": "C"},
+            ],
+            "caption": "caption",
+            "hashtags": [],
+            "suggested_format": "9:16",
+            "reasoning": "ok",
+        }
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            output = Path(command[command.index("-o") + 1])
+            output.write_text("esto no es JSON" if len(calls) == 1 else json.dumps(valid), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        codex_cli.subprocess.run = runner
+        result = codex_cli.CodexCliAnalysis().propose({"text": "x"})
+        self.assertEqual(len(calls), 2)
+        self.assertIn("REINTENTO", calls[1][-1])
+        self.assertEqual(len(result["options"]), 3)
+
     def test_the_model_can_be_forced(self):
         key = "DASHBOARD_CODEX_MODEL"
         original = os.environ.get(key)
@@ -192,6 +240,16 @@ class CommandLineTests(unittest.TestCase):
 
 
 class OutputSchemaTests(unittest.TestCase):
+    def test_proposal_schema_requires_three_pairs(self):
+        schema = codex_cli.PROPOSAL_SCHEMA
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(schema["properties"]["options"]["minItems"], 3)
+        self.assertEqual(schema["properties"]["options"]["maxItems"], 3)
+        self.assertEqual(
+            set(schema["required"]),
+            set(schema["properties"].keys()),
+        )
+
     def test_schema_requires_every_property(self):
         """Regresión: el modo estricto de OpenAI rechaza el esquema si falta alguno.
 

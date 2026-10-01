@@ -32,6 +32,7 @@ const app = {
   cards: [],
   selectedId: null,
   card: null,
+  proposal: null,
   busy: false,
   //: Día actual en la hora local del usuario, según el reloj verificado.
   today: null,
@@ -667,27 +668,170 @@ function renderInbox(tweets) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Procesar: se encola y se sigue, sin dejar al navegador esperando    */
+/* Procesar: primero propuestas, después confirmación y composición     */
 /* ------------------------------------------------------------------ */
+function analysisProviderForProposals() {
+  return (app.state && app.state.settings && app.state.settings.analysis_provider) || null;
+}
+
+function renderProposalOptions() {
+  const box = $("proposal-options");
+  const current = app.proposal;
+  if (!box || !current) return;
+  box.innerHTML = current.options.map((option, index) => {
+    const selected = index === current.selected;
+    return `<button type="button" class="proposal-option${selected ? " selected" : ""}"
+      role="radio" aria-checked="${selected ? "true" : "false"}"
+      data-proposal-index="${index}">
+      <span class="option-number">Opción ${index + 1}${selected ? " · elegida" : ""}</span>
+      <span class="option-top">${renderColoredText(option.top)}</span>
+      <span class="option-bottom">${renderColoredText(option.bottom)}</span>
+    </button>`;
+  }).join("");
+}
+
+/**
+ * Encabezado del panel de propuestas.
+ *
+ * La cuenta se busca en la bandeja, pero puede no estar ahí: si el filtro la
+ * oculta, antes se dibujaba una arroba suelta («@ · elige una…»).
+ */
+function proposalHeading(tweetId, total) {
+  const tweet = (app.tweets || []).find((item) => item.tweet_id === tweetId) || {};
+  const handle = tweet.author_handle || tweet.source_handle;
+  const cuenta = handle ? `@${handle} · ` : "";
+  if (total === 1) return `${cuenta}una alternativa disponible`;
+  return `${cuenta}elige una de ${total} alternativas`;
+}
+
+function showProposalChooser(result, tweetId) {
+  const payload = result && result.proposals ? result.proposals : result;
+  const options = (payload && payload.options) || [];
+  // Puede llegar menos de tres: las que no caben en la tarjeta se descartan
+  // antes de mostrarlas, para que ninguna elección pueda fallar al componer.
+  if (!options.length) {
+    throw new Error("El CLI no devolvió ninguna propuesta que quepa en la tarjeta.");
+  }
+  app.proposal = {
+    tweetId,
+    provider: payload.provider || analysisProviderForProposals(),
+    options,
+    caption: payload.caption || options[0].caption || "",
+    hashtags: payload.hashtags || options[0].hashtags || [],
+    suggestedFormat: payload.suggested_format || "",
+    reasoning: payload.reasoning || "",
+    selected: 0,
+  };
+  const descartadas = Number(payload.discarded) || 0;
+  const aviso = descartadas
+    ? ` Se descartaron ${descartadas} por no caber en la tarjeta (${escapeHtml(String(payload.format || "9:16"))}).`
+    : "";
+  $("proposal-tweet").textContent = proposalHeading(tweetId, options.length);
+  $("proposal-info").textContent =
+    (app.proposal.reasoning || "La opción 1 queda seleccionada por defecto.") + aviso;
+  $("proposal-panel").hidden = false;
+  renderProposalOptions();
+  $("proposal-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function selectProposal(index) {
+  if (!app.proposal) return;
+  const parsed = Number(index);
+  if (!Number.isInteger(parsed) || !app.proposal.options[parsed]) return;
+  app.proposal.selected = parsed;
+  $("proposal-info").textContent = `Opción ${parsed + 1} seleccionada. Confirma cuando quieras componer la imagen.`;
+  renderProposalOptions();
+}
+
+function closeProposalChooser() {
+  app.proposal = null;
+  $("proposal-panel").hidden = true;
+  $("proposal-options").innerHTML = "";
+}
+
+async function requestProposals(tweetId, previousOptions = [], instructions = "") {
+  const payload = await api(`/api/tweets/${tweetId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      provider: analysisProviderForProposals(),
+      instructions: instructions || null,
+      previous_options: previousOptions,
+    }),
+  });
+  if (!payload.queued || !payload.job) {
+    showProposalChooser(payload.proposals || payload, tweetId);
+    return payload.proposals || payload;
+  }
+  toast(`Generando tres opciones (trabajo ${payload.job.id}). Puedes seguir usando el dashboard.`);
+  const finished = await waitForJob(payload.job.id);
+  if (!finished || finished.state !== "hecho") {
+    throw new Error((finished && finished.detail) || "No se pudieron generar las propuestas.");
+  }
+  showProposalChooser(finished.result, tweetId);
+  return finished.result;
+}
+
 async function processTweet(tweetId, button) {
-  await withBusy(button, "Encolando…", async () => {
+  await withBusy(button, "Generando opciones…", async () => {
     try {
-      const payload = await api(`/api/tweets/${tweetId}/process`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      const job = payload.job || {};
-      toast(
-        `Procesando en segundo plano (trabajo ${job.id}). Puedes seguir usando el ` +
-        "dashboard o bloquear el móvil: el trabajo continúa en el servidor."
+      await requestProposals(tweetId);
+      toast("Elige una opción. La imagen todavía no se ha procesado.");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function generateMoreProposals() {
+  if (!app.proposal) return;
+  const button = $("btn-more-proposals");
+  const previous = app.proposal.options.map(({ top, bottom }) => ({ top, bottom }));
+  await withBusy(button, "Generando otras…", async () => {
+    try {
+      const nuevas = await requestProposals(
+        app.proposal.tweetId,
+        previous,
+        "No me convencen las opciones anteriores. Genera tres pares nuevos y claramente distintos."
       );
-      await loadTweets();
-      const finished = await waitForJob(job.id);
+      const total = ((nuevas && nuevas.options) || []).length;
+      toast(
+        `Hay ${total} opción(es) nueva(s). La primera vuelve a quedar seleccionada por defecto.`
+      );
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function confirmProposal() {
+  if (!app.proposal) return toast("Primero genera unas propuestas.", "error");
+  const current = app.proposal;
+  const selected = current.options[current.selected];
+  const button = $("btn-confirm-proposal");
+  await withBusy(button, "Procesando…", async () => {
+    try {
+      const payload = await api(`/api/tweets/${current.tweetId}/process`, {
+        method: "POST",
+        body: JSON.stringify({
+          provider: current.provider || analysisProviderForProposals(),
+          proposal: selected,
+        }),
+      });
+      if (!payload.queued || !payload.job) {
+        closeProposalChooser();
+        await loadTweets();
+        toast("Tarjeta generada y validada.");
+        return;
+      }
+      toast(`Procesando la opción ${current.selected + 1} (trabajo ${payload.job.id}).`);
+      const finished = await waitForJob(payload.job.id);
+      if (!finished || finished.state !== "hecho") {
+        throw new Error((finished && finished.detail) || "La composición falló.");
+      }
+      closeProposalChooser();
       await loadTweets();
       await loadState();
-      if (finished && finished.state === "hecho") {
-        toast("Tarjeta lista. Pulsa «Abrir editor» en la publicación.");
-      }
+      toast("Tarjeta lista. Pulsa «Abrir editor» en la publicación.");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1234,6 +1378,10 @@ document.addEventListener("click", async (event) => {
   if (target.id === "btn-analysis-test") return testAnalysis();
   if (target.id === "btn-purge") return purge();
   if (target.id === "btn-refresh-cards") return loadCards().catch((e) => toast(e.message, "error"));
+  if (target.id === "btn-cancel-proposals") return closeProposalChooser();
+  if (target.id === "btn-more-proposals") return generateMoreProposals();
+  if (target.id === "btn-confirm-proposal") return confirmProposal();
+  if (dataset.proposalIndex !== undefined) return selectProposal(dataset.proposalIndex);
 
   if (dataset.regen) return regenerateCard(dataset.regen, target);
   if (dataset.recompose) return recomposeCard(dataset.recompose, target);

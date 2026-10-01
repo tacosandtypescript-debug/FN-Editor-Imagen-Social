@@ -219,6 +219,173 @@ class DashboardIntegrationTests(unittest.TestCase):
         os.environ[key] = name
         self.addCleanup(restore)
 
+    def _stub_proposals(self, options, caption="caption", hashtags=None):
+        captured = {}
+
+        def fake_propose(tweet, preferred=None):
+            captured["tweet"] = dict(tweet)
+            return {
+                "options": [
+                    {
+                        "top": top,
+                        "bottom": bottom,
+                        "caption": caption,
+                        "hashtags": hashtags or ["#khetzalgg"],
+                        "suggested_format": "9:16",
+                        "reasoning": "stub",
+                        "provider": "stub",
+                    }
+                    for top, bottom in options
+                ],
+                "caption": caption,
+                "hashtags": hashtags or ["#khetzalgg"],
+                "suggested_format": "9:16",
+                "reasoning": "stub",
+                "provider": "stub",
+            }
+
+        original = analysis_providers.propose_tweet
+        analysis_providers.propose_tweet = fake_propose
+        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
+        return captured
+
+    def test_proposals_are_three_choices_and_do_not_compose_yet(self):
+        captured = self._stub_proposals(
+            [
+                ("OPCION UNO {MAPA|FF7A00}", "CONTEXTO UNO {NUEVO|8B3DFF}"),
+                ("OPCION DOS {MODO|FF39D7}", "CONTEXTO DOS {CAMBIO|42E8FF}"),
+                ("OPCION TRES {NOVEDAD|FFD166}", "CONTEXTO TRES {FECHA|B84DFF}"),
+            ]
+        )
+        result = self.service.propose_tweet(self.tweet_id, provider="codex")
+        self.assertEqual(len(result["options"]), 3)
+        self.assertEqual(result["options"][0]["top"], "OPCION UNO {MAPA|FF7A00}")
+        self.assertEqual(captured["tweet"]["tweet_id"], self.tweet_id)
+        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
+
+    def test_selected_proposal_is_the_one_that_gets_composed(self):
+        selected = {
+            "top": "ELEGIDA {MAPA|FF7A00}",
+            "bottom": "CONTEXTO ELEGIDO {NUEVO|8B3DFF}",
+            "caption": "caption elegido",
+            "hashtags": ["#khetzalgg"],
+            "provider": "codex",
+        }
+        result = self.service.process_tweet(
+            self.tweet_id,
+            {"resolution": "native", "backend": "cpu"},
+            provider="codex",
+            proposal=selected,
+        )
+        self.assertIn("par elegido", result["steps"])
+        self.assertEqual(result["card"]["params"]["top"], selected["top"])
+        self.assertEqual(result["card"]["params"]["bottom"], selected["bottom"])
+        self.assertEqual(self.service.get_tweet(self.tweet_id)["analysis"]["top"], selected["top"])
+
+    def test_regenerating_proposals_receives_previous_options(self):
+        captured = self._stub_proposals(
+            [("A {MAPA|FF7A00}", "B {NUEVO|8B3DFF}"),
+             ("C {MODO|FF39D7}", "D {CAMBIO|42E8FF}"),
+             ("E {NOVEDAD|FFD166}", "F {FECHA|B84DFF}")]
+        )
+        previous = [{"top": "ANTERIOR", "bottom": "NO ME GUSTA"}]
+        self.service.propose_tweet(
+            self.tweet_id,
+            provider="codex",
+            instructions="genera otras",
+            previous_options=previous,
+        )
+        self.assertEqual(captured["tweet"]["instructions"], "genera otras")
+        self.assertEqual(captured["tweet"]["previous_options"], previous)
+
+    def _stub_propose_sequence(self, lotes):
+        """Devuelve un lote distinto en cada llamada y captura lo recibido."""
+        llamadas: list[dict] = []
+
+        def fake_propose(tweet, preferred=None):
+            llamadas.append(dict(tweet))
+            lote = lotes[min(len(llamadas) - 1, len(lotes) - 1)]
+            return {
+                "options": [
+                    {
+                        "top": top,
+                        "bottom": bottom,
+                        "caption": "caption",
+                        "hashtags": ["#khetzalgg"],
+                        "suggested_format": "9:16",
+                        "reasoning": "stub",
+                        "provider": "stub",
+                    }
+                    for top, bottom in lote
+                ],
+                "caption": "caption",
+                "hashtags": ["#khetzalgg"],
+                "suggested_format": "9:16",
+                "reasoning": "stub",
+                "provider": "stub",
+            }
+
+        original = analysis_providers.propose_tweet
+        analysis_providers.propose_tweet = fake_propose
+        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
+        return llamadas
+
+    def test_proposals_that_do_not_fit_are_discarded_and_regenerated(self):
+        """Una opción que no cabe en la tarjeta no llega a ofrecerse.
+
+        Se dio en real: se eligió una propuesta de 90 caracteres y la
+        composición falló después, con el usuario ya esperando la imagen.
+        """
+        largas = [
+            ("TITULAR UNO", "Su llegada está confirmada en v42.30, aunque la obtención permanece sin identificar."),
+            ("TITULAR DOS", "Este otro contexto también es demasiado largo para caber en la tarjeta vertical."),
+            ("TITULAR TRES", "Y este tercero igual de largo, con muchas palabras que no entran de ninguna manera."),
+        ]
+        cortas = [("CORTA A", "CONTEXTO A"), ("CORTA B", "CONTEXTO B"), ("CORTA C", "CONTEXTO C")]
+        llamadas = self._stub_propose_sequence([largas, cortas])
+
+        result = self.service.propose_tweet(self.tweet_id, provider="codex")
+
+        # El primer trío no cabía: se pidió otro antes de mostrar nada.
+        self.assertEqual(len(llamadas), 2)
+        self.assertEqual(result["discarded"], 3)
+        self.assertEqual(len(result["options"]), 3)
+        self.assertEqual(result["options"][0]["top"], "CORTA A")
+        # Y la segunda petición llevaba la instrucción de acortar.
+        self.assertIn("no cabía", llamadas[1]["instructions"])
+
+    def test_a_single_fitting_proposal_is_still_offered(self):
+        """Si solo cabe una, se ofrece una: nunca una que falle al componer."""
+        llamadas = self._stub_propose_sequence(
+            [[
+                ("CABE A", "CORTO A"),
+                ("NO CABE", "Un contexto larguisimo que no va a caber jamas en la tarjeta vertical de nueve dieciseis."),
+                ("NO CABE B", "Otro contexto igualmente larguisimo que tampoco entra en la tarjeta nunca jamas."),
+            ]]
+        )
+        result = self.service.propose_tweet(self.tweet_id, provider="codex")
+        self.assertEqual(len(result["options"]), 1)
+        self.assertEqual(result["options"][0]["top"], "CABE A")
+        # Se intentó una segunda vez para completar el trío, sin conseguirlo.
+        self.assertEqual(len(llamadas), 2)
+
+    def test_the_real_failure_is_now_caught_before_composing(self):
+        """El texto que falló de verdad se detecta y no se ofrece."""
+        llamadas = self._stub_propose_sequence(
+            [[
+                ("CRYSTALLIZED {PUNISHER|8B3DFF}: UN PICO SIN RUTA REVELADA",
+                 "Su llegada está confirmada en v42.30, aunque la {OBTENCIÓN|FF7A00} permanece sin identificar."),
+                ("OTRO TITULAR {MAPA|FF7A00}", "CONTEXTO CORTO"),
+                ("TERCER TITULAR {MODO|FF39D7}", "OTRO CONTEXTO"),
+            ]]
+        )
+        result = self.service.propose_tweet(self.tweet_id, provider="codex")
+        self.assertEqual(result["discarded"], 1)
+        self.assertEqual(len(result["options"]), 2)
+        for opcion in result["options"]:
+            self.assertNotIn("Su llegada está confirmada", opcion["bottom"])
+        self.assertEqual(len(llamadas), 2)
+
     def test_process_reanalyses_when_the_stored_analysis_was_a_fallback(self):
         """Lo pedido: al procesar debe analizar ChatGPT, no reusar el relleno."""
         self.service.store.update_tweet(
@@ -567,12 +734,41 @@ class DashboardHttpTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
+    def _stub_proposals(self, options):
+        original = analysis_providers.propose_tweet
+
+        def fake_propose(tweet, preferred=None):
+            return {
+                "options": [
+                    {
+                        "top": top,
+                        "bottom": bottom,
+                        "caption": "caption",
+                        "hashtags": ["#khetzalgg"],
+                        "suggested_format": "9:16",
+                        "reasoning": "stub",
+                        "provider": "stub",
+                    }
+                    for top, bottom in options
+                ],
+                "caption": "caption",
+                "hashtags": ["#khetzalgg"],
+                "suggested_format": "9:16",
+                "reasoning": "stub",
+                "provider": "stub",
+            }
+
+        analysis_providers.propose_tweet = fake_propose
+        self.addCleanup(setattr, analysis_providers, "propose_tweet", original)
+
     # ------------------------------------------------------------------
     def test_index_and_static_assets_are_served(self):
         status, index = self.call("GET", "/", raw=True)
         self.assertEqual(status, 200)
         self.assertIn(b"<html", index.lower())
         self.assertIn(b"EditImg Dashboard", index)
+        self.assertIn("Generar otras 3 opciones".encode("utf-8"), index)
+        self.assertIn(b"proposal-options", index)
 
         for path, marker in (
             ("/static/app.js", b"EditImg Dashboard"),
@@ -701,6 +897,48 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertTrue(tweet["is_processed"])
         self.assertTrue(tweet["posted_relative"])
         self.assertTrue(tweet["posted_absolute"])
+
+    def test_process_endpoint_can_confirm_a_selected_proposal(self):
+        self._stub_proposals(
+            [("UNO {MAPA|FF7A00}", "CONTEXTO UNO {NUEVO|8B3DFF}"),
+             ("DOS {MODO|FF39D7}", "CONTEXTO DOS {CAMBIO|42E8FF}"),
+             ("TRES {NOVEDAD|FFD166}", "CONTEXTO TRES {FECHA|B84DFF}")]
+        )
+        status, proposals = self.call(
+            "POST", f"/api/tweets/{self.tweet_id}/proposals",
+            {"provider": "codex", "sync": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(proposals["options"]), 3)
+
+        status, result = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/process",
+            {
+                "provider": "codex",
+                "proposal": proposals["options"][1],
+                "params": {"resolution": "native", "backend": "cpu"},
+                "sync": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertIn("par elegido", result["steps"])
+        self.assertTrue(result["card"]["params"]["top"].startswith("DOS {MODO|"))
+        self.assertTrue(result["card"]["params"]["bottom"].startswith("CONTEXTO DOS {CAMBIO|"))
+
+    def test_proposals_endpoint_is_queued_by_default(self):
+        self._stub_proposals(
+            [("UNO", "A"), ("DOS", "B"), ("TRES", "C")]
+        )
+        status, payload = self.call(
+            "POST", f"/api/tweets/{self.tweet_id}/proposals", {"provider": "codex"}
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        finished = self.service.jobs.wait(payload["job"]["id"], timeout=60)
+        self.assertEqual(finished.state, "hecho", finished.detail)
+        self.assertEqual(len(finished.result["options"]), 3)
+        self.assertIsNone(self.service.store.latest_card(self.tweet_id))
 
     def test_processed_publications_leave_the_pending_view(self):
         """Lo procesado deja de estorbar en la vista por defecto."""
