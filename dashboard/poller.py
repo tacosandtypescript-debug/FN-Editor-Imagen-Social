@@ -11,6 +11,7 @@ tiempo»; los sondeos pedidos a mano siguen funcionando.
 from __future__ import annotations
 
 import threading
+import time
 
 from . import config
 from .service import DashboardService
@@ -33,8 +34,11 @@ class Poller:
         self._wake = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        #: Momento (epoch) del próximo sondeo automático, para poder mostrarlo.
+        self._next_at: float | None = None
         self.last_run: dict | None = None
         self.last_error: str | None = None
+        self.last_run_at: str | None = None
         self.progress: dict = {
             "running": False,
             "done": 0,
@@ -75,9 +79,13 @@ class Poller:
         while not self._stop.is_set():
             # Sin sondeo periódico la espera es indefinida: el hilo queda
             # dormido hasta que alguien pida uno a mano.
-            timeout = self.interval if self.periodic else None
-            self._wake.wait(timeout=timeout)
+            if self.periodic:
+                self._next_at = time.time() + self.interval
+            else:
+                self._next_at = None
+            self._wake.wait(timeout=self.interval if self.periodic else None)
             self._wake.clear()
+            self._next_at = None
             if self._stop.is_set():
                 break
             self._run_once()
@@ -94,6 +102,7 @@ class Poller:
                 return
             self.last_run = self.service.poll(progress=self.progress)
             self.last_error = None
+            self.last_run_at = self.service.now().replace(microsecond=0).isoformat()
         except Exception as exc:  # noqa: BLE001 - el hilo nunca debe morir
             self.last_error = str(exc)[:300]
             self.service.store.log(f"Sondeo automático fallido: {self.last_error}", level="error")
@@ -102,12 +111,17 @@ class Poller:
             self._lock.release()
 
     def status(self) -> dict:
+        remaining = None
+        if self._next_at is not None:
+            remaining = max(0, int(round(self._next_at - time.time())))
         return {
             "running": self.running,
             "periodic": self.periodic,
             "interval_seconds": self.interval,
             "busy": self._lock.locked(),
             "last_run": self.last_run,
+            "last_run_at": self.last_run_at,
             "last_error": self.last_error,
+            "next_run_in_seconds": remaining,
             "progress": dict(self.progress),
         }

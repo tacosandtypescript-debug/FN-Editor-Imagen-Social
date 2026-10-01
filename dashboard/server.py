@@ -482,6 +482,15 @@ def serve(host: str | None = None, port: int | None = None, periodic: bool = Tru
     interfaz.
     """
     server, service, poller = create_server(host, port, periodic=periodic)
+
+    # La hora se mide antes de registrar nada: si no, el primer suceso
+    # («Dashboard iniciado») quedaría fechado con el reloj del sistema, que
+    # puede ir desviado, y parecería de otra hora.
+    try:
+        service.sync_clock(force=True)
+    except Exception as exc:  # noqa: BLE001 - sin red se sigue con el reloj local
+        print(f"Aviso: no se pudo verificar la hora por internet ({type(exc).__name__}).")
+
     poller.start()
 
     token = getattr(server, "access_token", "")

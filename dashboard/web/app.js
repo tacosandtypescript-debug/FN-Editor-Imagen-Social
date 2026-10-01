@@ -91,6 +91,7 @@ async function loadState() {
   renderSettings(state.settings);
   renderAnalysisStatus(state);
   renderMaintenance(state);
+  renderPollerState(state);
   renderEvents(state.events);
   renderAnalysisOptions(state.analysis_providers);
   renderStyleOptions();
@@ -286,6 +287,53 @@ async function purge() {
       toast(error.message, "error");
     }
   });
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total} s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+/** Estado del sondeo automático: deja claro si busca solo y cuándo toca. */
+function renderPollerState(state) {
+  const box = $("poller-state");
+  if (!box) return;
+  const poller = state.poller || {};
+  const parts = [];
+
+  if (!poller.periodic) {
+    parts.push(
+      `<span class="pill warn"><span class="dot"></span>búsqueda automática desactivada</span>`,
+      `<span class="muted">Arranca con <code>python -m dashboard --lan</code> (sin <code>--no-poller</code>) ` +
+      `para que busque sola. El botón «Buscar ahora» funciona igual.</span>`
+    );
+  } else if (poller.busy) {
+    const progress = poller.progress || {};
+    parts.push(
+      `<span class="pill ok"><span class="spinner"></span>buscnado… ${progress.done || 0}/${progress.total || "?"}</span>`,
+      progress.current ? `<span class="muted">leyendo @${escapeHtml(progress.current)}</span>` : ""
+    );
+  } else {
+    parts.push(`<span class="pill ok"><span class="dot"></span>búsqueda automática activa</span>`);
+    parts.push(`<span class="muted">cada ${escapeHtml(formatDuration(poller.interval_seconds))}</span>`);
+    if (poller.next_run_in_seconds !== null && poller.next_run_in_seconds !== undefined) {
+      parts.push(`<span class="muted">· próxima en ${escapeHtml(formatDuration(poller.next_run_in_seconds))}</span>`);
+    }
+    if (poller.last_run_at) {
+      parts.push(`<span class="muted">· última: ${escapeHtml(formatDate(poller.last_run_at))}</span>`);
+    } else {
+      parts.push(`<span class="muted">· todavía no ha buscado en esta sesión</span>`);
+    }
+  }
+  if (poller.last_error) {
+    parts.push(`<span class="pill off">último error: ${escapeHtml(poller.last_error)}</span>`);
+  }
+  box.innerHTML = parts.join(" ");
 }
 
 function renderSettings(settings) {
