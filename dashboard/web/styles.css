@@ -92,7 +92,14 @@ body {
   font-size: 14px;
   line-height: 1.5;
   min-height: 100vh;
+  /* Tirar hacia abajo para recargar es fácil de provocar sin querer y hace
+     perder el estado de la página; aquí se desactiva. */
+  overscroll-behavior-y: contain;
 }
+
+/* Sin `manipulation`, el móvil espera hasta 300 ms a ver si es doble toque:
+   los botones se sienten lentos. */
+button, a, select, input, label, [role="button"] { touch-action: manipulation; }
 
 a { color: var(--gold); }
 
@@ -225,6 +232,28 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 }
 .tweet .actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
+/* ------------------------------------------------------------------
+   Tarjetas procesadas
+
+   Una tarjeta 9:16 en una columna de 430 px mide 765 px de alto, así que
+   dejaba los botones («Abrir editor», «Regenerar texto», «Enviar») muy por
+   debajo del borde de la pantalla, y no solo en el móvil. Aquí los botones
+   van antes que la imagen y la imagen se limita: se sigue viendo la tarjeta,
+   pero se puede actuar sin bajar.
+   ------------------------------------------------------------------ */
+.tweet.processed .actions { order: 2; gap: 8px; }
+.tweet.processed .card-shot { order: 3; }
+
+.tweet.processed .card-shot img {
+  max-height: 46vh;
+  object-fit: contain;
+  background: var(--preview-bg);
+}
+
+@media (max-width: 700px) {
+  .tweet.processed .card-shot img { max-height: 40vh; }
+}
+
 .preview {
   background: var(--preview-bg) repeating-conic-gradient(var(--preview-alt) 0% 25%, var(--bg-code) 0% 50%) 50% / 22px 22px;
   border: 1px solid var(--line); border-radius: var(--radius);
@@ -298,6 +327,21 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
 }
 
 /* ==================================================================
+   Dispositivos táctiles, sea cual sea el ancho
+
+   Antes esto dependía solo del ancho (`max-width: 700px`), así que una
+   tableta de 768 px recibía los botones compactos de escritorio (28-37 px de
+   alto), demasiado pequeños para el dedo. Se decide por el tipo de puntero,
+   que es lo que de verdad importa, y se mantiene el ancho como respaldo.
+   ================================================================== */
+@media (pointer: coarse) {
+  button { min-height: 44px; padding: 10px 14px; }
+  button.small { min-height: 44px; padding: 9px 12px; }
+  input, select, textarea { font-size: 16px; padding: 10px 12px; }
+  .tweet .actions { gap: 8px; }
+}
+
+/* ==================================================================
    Móvil
    ================================================================== */
 @media (max-width: 700px) {
@@ -308,10 +352,11 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   }
 
   /* iOS hace zoom al enfocar un campo de menos de 16px y descuadra la
-     página; con 16px se evita. */
+     página; con 16px se evita. (Se repite aquí por si el puntero se declara
+     fino, como en una ventana estrecha de escritorio.) */
   input, select, textarea { font-size: 16px; padding: 10px 12px; }
 
-  /* Objetivos táctiles cómodos: 44 px es el mínimo recomendado. */
+  /* Objetivos táctiles cómodos. */
   button { min-height: 44px; padding: 10px 14px; }
   button.small { min-height: 44px; padding: 9px 12px; }
 
@@ -353,6 +398,16 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
 
   /* Los botones de cada publicación ocupan el ancho y se apilan. */
   .tweet .actions { gap: 8px; }
+
+  /* Las cuentas de estado, en una sola fila deslizable en lugar de tres
+     apiladas: cada fila de más es una publicación que no se ve. */
+  #counts {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  #counts::-webkit-scrollbar { display: none; }
   .tweet .actions button, .tweet .actions a {
     flex: 1 1 auto; text-align: center;
   }

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from . import config
+from . import previews
 from . import timefmt
 from . import urls
 from .clock import CLOCK
@@ -523,6 +524,12 @@ class DashboardService:
 
         outcome = self.store.purge_older_than(settings.retention_hours, config.MEDIA_DIR)
         self.store.set_setting("last_purge_at", self.now().replace(microsecond=0).isoformat())
+        # Las miniaturas reducidas también se podan: se regeneran solas si
+        # hicieran falta, así que no hay riesgo en borrarlas.
+        try:
+            outcome["previews_removed"] = previews.prune()
+        except Exception:  # noqa: BLE001 - la limpieza no debe tumbar el sondeo
+            outcome["previews_removed"] = 0
         if outcome["purged"]:
             self.store.log(
                 f"Limpieza: {outcome['purged']} publicación(es) de más de "

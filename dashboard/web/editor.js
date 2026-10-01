@@ -1,4 +1,4 @@
-﻿/* Editor independiente de tarjeta — JavaScript puro, sin dependencias.
+/* Editor independiente de tarjeta — JavaScript puro, sin dependencias.
  *
  * La única operación con IA aquí es «Regenerar texto y caption», que vuelve a
  * generar el titular de arriba, el texto de abajo y el caption. Las imágenes y
@@ -203,8 +203,10 @@ function showCard(card) {
   editor.card = card;
   const meta = card.meta || {};
   const stamp = encodeURIComponent(card.output_path || card.id);
-  const src = `/api/cards/${card.id}/image?v=${stamp}`;
-  $("preview").innerHTML = `<img src="${src}" alt="Tarjeta">`;
+  // Versión reducida para revisar; el PNG original se descarga aparte.
+  const src = `/api/cards/${card.id}/image?size=preview&w=1440&v=${stamp}`;
+  $("preview").innerHTML =
+    `<img src="${src}" alt="Vista previa de la tarjeta ${card.id}">`;
   $("preview-meta").textContent =
     `v${card.version} · ${meta.width || "?"}×${meta.height || "?"} · ` +
     `${meta.output_format || ""} · ${meta.style || ""} · ${meta.resolution || ""} · ` +

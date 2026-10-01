@@ -799,7 +799,9 @@ function currentParams() {
 function showCard(card) {
   app.card = card;
   const meta = card.meta || {};
-  const src = `/api/cards/${card.id}/image?v=${encodeURIComponent(card.output_path || card.id)}`;
+  // Vista previa reducida: el PNG original ronda los 30 MB y aquí se muestra
+  // a unos cientos de píxeles.
+  const src = `/api/cards/${card.id}/image?size=preview&w=1440&v=${encodeURIComponent(card.output_path || card.id)}`;
   $("preview").innerHTML = `<img src="${src}" alt="Tarjeta generada">`;
   $("preview-meta").textContent =
     `v${card.version} · ${meta.width || "?"}×${meta.height || "?"} · ${meta.output_format || ""} · ` +
@@ -965,6 +967,30 @@ async function sendCard() {
 /* ------------------------------------------------------------------ */
 /* Navegación                                                          */
 /* ------------------------------------------------------------------ */
+/**
+ * Convierte el marcado de color del compositor en texto con color de verdad.
+ *
+ * Las tarjetas guardan «{PALABRA|FF7A00}» para pintar palabras sueltas. En un
+ * campo de edición debe verse el marcado, porque es lo que se edita; pero en
+ * una vista de lectura, mostrarlo en crudo parece un error de la aplicación.
+ */
+function renderColoredText(markup) {
+  const texto = String(markup || "");
+  const patron = /\{([^{}|]+)\|([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\}/g;
+  let salida = "";
+  let ultimo = 0;
+  let coincidencia = patron.exec(texto);
+  while (coincidencia !== null) {
+    salida += escapeHtml(texto.slice(ultimo, coincidencia.index));
+    salida +=
+      `<span style="color:#${coincidencia[2]}">` +
+      `${escapeHtml(coincidencia[1])}</span>`;
+    ultimo = coincidencia.index + coincidencia[0].length;
+    coincidencia = patron.exec(texto);
+  }
+  return salida + escapeHtml(texto.slice(ultimo));
+}
+
 /* ------------------------------------------------------------------ */
 /* Procesadas: donde viven las tarjetas ya creadas                     */
 /* ------------------------------------------------------------------ */
@@ -994,7 +1020,12 @@ function renderCards(cards) {
     const tweet = item.tweet || {};
     const meta = card.meta || {};
     const params = card.params || {};
-    const src = `/api/cards/${card.id}/image?v=${encodeURIComponent(card.output_path || card.id)}`;
+    // Miniatura reducida, no el PNG de 30 MB: en una lista de móvil el
+    // original es una imagen de 4000 px en un hueco de 400 px.
+    const sello = encodeURIComponent(`${card.output_path || card.id}-${card.version || ""}`);
+    const src = `/api/cards/${card.id}/image?size=preview&w=720&v=${sello}`;
+    const src2x = `/api/cards/${card.id}/image?size=preview&w=1440&v=${sello}`;
+    const descarga = `/api/cards/${card.id}/image?size=full`;
     // Se reserva el espacio de la imagen con su proporción real: si no, al
     // cargar empuja el contenido y la lista da un salto (CLS).
     const ancho = Number(meta.width) || 0;
@@ -1015,13 +1046,14 @@ function renderCards(cards) {
           <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle || "")}</span>
           <span class="muted">${escapeHtml(tweet.posted_relative || "")}</span>
         </div>
-        <a href="${escapeHtml(item.editor_url)}" target="_blank" rel="noopener">
-          <img src="${src}" alt="Tarjeta generada de @${escapeHtml(tweet.author_handle || "")}"
-               loading="lazy" decoding="async"
+        <a href="${escapeHtml(item.editor_url)}" target="_blank" rel="noopener" class="card-shot">
+          <img src="${src}" srcset="${src} 1x, ${src2x} 2x"
+               alt="Tarjeta generada de @${escapeHtml(tweet.author_handle || "")}"
+               loading="lazy" decoding="async" width="${ancho || ""}" height="${alto || ""}"
                style="width:100%;border-radius:10px;border:1px solid var(--line);${proporcion}">
         </a>
-        <div class="small"><strong>${escapeHtml(params.top || "")}</strong></div>
-        <div class="small muted">${escapeHtml(params.bottom || "")}</div>
+        <div class="small"><strong>${renderColoredText(params.top)}</strong></div>
+        <div class="small muted">${renderColoredText(params.bottom)}</div>
         <div class="small muted">${escapeHtml(String(meta.width || "?"))}×${escapeHtml(String(meta.height || "?"))}
           · ${escapeHtml(String(meta.output_format || ""))}</div>
         ${entrega}
@@ -1029,7 +1061,7 @@ function renderCards(cards) {
           <button class="small accent" data-editor="${escapeHtml(String(card.id))}">Abrir editor</button>
           <button class="small" data-regen="${escapeHtml(String(card.id))}">Regenerar texto</button>
           <button class="small primary" data-send="${escapeHtml(String(card.id))}">Enviar a Telegram</button>
-          <a class="small" href="${src}" download="tarjeta-${escapeHtml(String(card.id))}.png">Descargar</a>
+          <a class="small" href="${descarga}" download="tarjeta-${escapeHtml(String(card.id))}.png">Descargar</a>
         </div>
       </div>`;
   }).join("");

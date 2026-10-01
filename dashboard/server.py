@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from . import config
+from . import previews
 from .poller import Poller
 from .service import DashboardError, DashboardService
 
@@ -448,12 +449,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"job": job, "queued": True}, status=202)
 
     def get_card_image(self, query, card_id: str) -> None:
+        """Sirve la tarjeta.
+
+        Por defecto entrega la **versión reducida**: el PNG original ronda los
+        30 MB y en una lista de móvil eso es servir una imagen de 4000 px en un
+        hueco de 400 px. Con `size=full` se entrega el PNG original, que es lo
+        que se descarga y lo que se envía a Telegram.
+        """
         path = self.service.card_image(int(card_id))
+        size = (_first(query, "size") or "preview").lower()
+        tipo = "image/png"
+        if size in ("preview", "thumb", "reduced"):
+            ancho = _int_param(query, "w", previews.PREVIEW_MAX_SIDE)
+            try:
+                path = previews.preview_path(path, max_side=ancho or previews.PREVIEW_MAX_SIDE)
+                tipo = "image/jpeg"
+            except Exception:  # noqa: BLE001 - ante cualquier fallo, el original
+                tipo = "image/png"
         body = path.read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Type", tipo)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # Las miniaturas llevan el sello del original en el nombre, así que se
+        # pueden cachear; el original no, porque se recompone a menudo.
+        self.send_header(
+            "Cache-Control",
+            "public, max-age=300" if tipo == "image/jpeg" else "no-store",
+        )
         self.end_headers()
         self.wfile.write(body)
 

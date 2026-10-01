@@ -1,4 +1,4 @@
-﻿"""Tests de integración del dashboard.
+"""Tests de integración del dashboard.
 
 Ejercitan el compositor real y la API HTTP completa sin salir a la red: los
 medios se colocan ya descargados en el directorio de trabajo y el análisis y
@@ -85,6 +85,7 @@ class DashboardIntegrationTests(unittest.TestCase):
         Image.new("RGB", (640, 360), (35, 90, 170)).save(self.source)
 
     def tearDown(self):
+        # Esta clase no levanta servidor ni sondeador: solo el servicio.
         self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
@@ -513,6 +514,7 @@ class DashboardHttpTests(unittest.TestCase):
         self.thread.join(timeout=5)
         # Los hilos de la cola de trabajos deben parar antes de borrar el
         # directorio temporal: si no, siguen usando la base de datos.
+        self.poller.stop()
         self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
@@ -523,6 +525,19 @@ class DashboardHttpTests(unittest.TestCase):
             os.environ.pop(key, None)
         else:
             os.environ[key] = self._provider_before
+
+    def call_raw(self, method, path, body=None):
+        """Como `call`, pero devuelve también las cabeceras de la respuesta."""
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(
+            self.base + path, data=data, method=method,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return response.status, response.read(), dict(response.headers)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), dict(exc.headers)
 
     def call(self, method, path, body=None, raw=False):
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -598,9 +613,16 @@ class DashboardHttpTests(unittest.TestCase):
         card_id = created["card"]["id"]
         self.assertTrue(created["card"]["meta"]["verification"]["ok"])
 
-        status, image = self.call("GET", f"/api/cards/{card_id}/image", raw=True)
+        # Sin pedir nada se sirve la reducida (ligera, para listas); el PNG
+        # original se pide explícitamente con size=full.
+        status, image = self.call("GET", f"/api/cards/{card_id}/image?size=full", raw=True)
         self.assertEqual(status, 200)
         self.assertTrue(image.startswith(b"\x89PNG"))
+
+        status, reducida = self.call("GET", f"/api/cards/{card_id}/image", raw=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(reducida.startswith(b"\xff\xd8"), "la vista previa es JPEG")
+        self.assertLess(len(reducida), len(image))
 
         status, sent = self.call(
             "POST", f"/api/cards/{card_id}/send", {"provider": "local", "caption": "hola", "sync": True}
@@ -820,6 +842,65 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn(b'data-tab="cards"', body)
         self.assertIn("Procesadas".encode(), body)
 
+    def test_the_list_serves_a_small_preview_not_the_full_png(self):
+        """Servir el PNG de 30 MB en una miniatura hundía el móvil."""
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        card_id = created["card"]["id"]
+
+        status, reducida, cabeceras = self.call_raw(
+            "GET", f"/api/cards/{card_id}/image?size=preview&w=720"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(cabeceras.get("Content-Type"), "image/jpeg")
+        self.assertLess(len(reducida), 400_000, "la vista previa debería ser ligera")
+
+        status, completa, cabeceras = self.call_raw(
+            "GET", f"/api/cards/{card_id}/image?size=full"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(cabeceras.get("Content-Type"), "image/png")
+        self.assertGreater(
+            len(completa), len(reducida), "la completa debe pesar más que la reducida"
+        )
+
+    def test_the_preview_is_the_default(self):
+        """Sin pedir nada se sirve la reducida, que es lo que usa la lista."""
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        card_id = created["card"]["id"]
+        status, _cuerpo, cabeceras = self.call_raw("GET", f"/api/cards/{card_id}/image")
+        self.assertEqual(status, 200)
+        self.assertEqual(cabeceras.get("Content-Type"), "image/jpeg")
+        self.assertIn("max-age", cabeceras.get("Cache-Control", ""))
+
+    def test_the_reduced_image_keeps_the_card_proportions(self):
+        status, created = self.call(
+            "POST",
+            f"/api/tweets/{self.tweet_id}/card",
+            {"params": {"top": "A", "bottom": "B", "resolution": "native", "backend": "cpu"}},
+        )
+        meta = created["card"]["meta"]
+
+        import io
+
+        from PIL import Image
+
+        status, cuerpo, _ = self.call_raw(
+            "GET", f"/api/cards/{created['card']['id']}/image?size=preview&w=480"
+        )
+        self.assertEqual(status, 200)
+        with Image.open(io.BytesIO(cuerpo)) as imagen:
+            ancho, alto = imagen.size
+        self.assertEqual(max(ancho, alto), 480)
+        self.assertAlmostEqual(ancho / alto, meta["width"] / meta["height"], places=2)
+
     def test_cards_have_one_file_per_tweet(self):
         status, created = self.call(
             "POST",
@@ -875,6 +956,7 @@ class AccessControlTests(unittest.TestCase):
         self.thread.join(timeout=5)
         # Los hilos de la cola de trabajos deben parar antes de borrar el
         # directorio temporal: si no, siguen usando la base de datos.
+        self.poller.stop()
         self.service.shutdown()
         for name, value in self._originals.items():
             setattr(config, name, value)
