@@ -1,20 +1,21 @@
 # EditImg Dashboard
 
-**Visor de publicaciones.** Trae lo que publican las cuentas de X que sigas y lo
-enseña para mirarlo: imágenes y vídeos, con tres botones por publicación.
+**Radar de publicaciones.** Trae lo que publican las cuentas de X que sigas y lo
+enseña para revisarlo: imágenes y vídeos, con acciones rápidas por publicación.
 
 ```
-Cuentas de X → búsqueda automática → publicaciones nuevas → dashboard
-   → Ver original · Copiar enlace · Marcar listo
+Cuentas de X → sondeo automático → publicaciones nuevas → dashboard
+   → Abrir en X · Copiar enlace · Conservar · Enviar a Telegram (Fase 2)
 ```
 
-Cada publicación se puede **abrir en X**, **copiar su enlace** o **marcar como
-lista**. Marcar como lista es lo que la salva de la limpieza automática.
+Cada publicación se puede **abrir en X**, **copiar su enlace** o **conservar**.
+Conservarla es lo que la salva de la limpieza automática. El botón de Telegram
+queda preparado en la bandeja, pero permanece desactivado hasta conectar el
+adaptador que recibe el enlace y devuelve la tarjeta.
 
-> Este dashboard **ya no genera tarjetas**. Tuvo editor, análisis con IA,
-> composición y envío a Telegram, y todo eso se retiró: eran demasiados botones
-> para lo que se hace a diario. El compositor sigue en `bin/` del repositorio,
-> intacto; simplemente ya no se usa desde aquí.
+> Este dashboard **no genera tarjetas ni muestra un editor**. El compositor sigue
+> en `bin/` del repositorio, intacto; la conexión que enviará un enlace a
+> Telegram y devolverá la tarjeta queda separada como la siguiente fase.
 
 ---
 
@@ -108,8 +109,12 @@ Variables más útiles:
 | `DASHBOARD_POLL_ON_START` | `1` | Sondear al arrancar |
 | `DASHBOARD_NITTER_INSTANCES` | 2 instancias | Respaldo, separadas por comas |
 | `DASHBOARD_RETENTION_HOURS` | `48` | Horas que dura una publicación sin marcar |
+| `TELEGRAM_BOT_TOKEN` | vacío | Credencial del bot para la futura entrega |
+| `TELEGRAM_CHAT_ID` | vacío | Chat de destino autorizado para la futura entrega |
 
-Las variables de análisis, IA y Telegram que había antes ya no se leen.
+Las variables de análisis e IA ya no participan en el dashboard. Las variables
+de Telegram solo muestran si existe configuración; la entrega real se habilita
+cuando quede fijado el contrato del bot receptor.
 
 ## Datos locales
 

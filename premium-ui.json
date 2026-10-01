@@ -1,0 +1,14 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["dashboard/web"],
+  "locale": "es-ES",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {
+    "Select/Listbox": "native",
+    "Form": "manual validation in dashboard/web/app.js",
+    "Scrollbar": "global application stylesheet",
+    "Toast": "#toast live region",
+    "CRUD": "dashboard/server.py and dashboard/service.py"
+  }
+}

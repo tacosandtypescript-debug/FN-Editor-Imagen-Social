@@ -204,6 +204,12 @@ class Settings:
     )
     x_api_bearer: str = field(default_factory=lambda: _env("X_API_BEARER_TOKEN", ""))
 
+    # --- Handoff a Telegram -------------------------------------------
+    # La Fase 1 solo expone si existe una configuración válida. El adaptador
+    # que entrega el enlace al flujo de Telegram se conecta en la Fase 2.
+    telegram_bot_token: str = field(default_factory=lambda: _env("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
+
 
 def ensure_directories() -> None:
     """Crea el árbol de trabajo local (ignorado por Git)."""
@@ -320,4 +326,6 @@ def redacted(settings: Settings) -> dict:
         "browser_headless": settings.browser_headless,
         "browser_channel": settings.browser_channel,
         "x_api_bearer_set": bool(settings.x_api_bearer),
+        "telegram_bot_token_set": bool(settings.telegram_bot_token),
+        "telegram_chat_id_set": bool(settings.telegram_chat_id),
     }

@@ -3,130 +3,248 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EditImg · Publicaciones</title>
+<meta name="theme-color" content="#080b10">
+<title>EditImg · Radar</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+<a class="skip-link" href="#main-content">Saltar al contenido</a>
 
-<header class="top">
-  <div class="brand">
-    <h1>Publicaciones</h1>
-    <span>Fortnite · solo mirar y marcar</span>
+<header class="topbar">
+  <div class="brand-lockup">
+    <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div>
+      <p class="eyebrow">EDITIMG / MONITOR</p>
+      <h1>Radar de publicaciones</h1>
+      <p class="brand-subtitle">X → Telegram · señales nuevas en un solo lugar</p>
+    </div>
   </div>
-  <div class="spacer"></div>
-  <div id="provider-pills" class="row"></div>
-  <button id="btn-poll" class="primary">Buscar ahora</button>
+  <div class="topbar-actions">
+    <div id="top-status" class="status-chip" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>Comprobando monitor…</span>
+    </div>
+    <button id="btn-poll" class="button primary" type="button" onclick="startPoll()">Buscar ahora</button>
+  </div>
 </header>
 
-<nav class="tabs" role="tablist" aria-label="Secciones">
-  <button data-tab="inbox" class="active" aria-current="page">Bandeja</button>
-  <button data-tab="accounts">Cuentas</button>
-  <button data-tab="settings">Ajustes</button>
+<nav class="tabs" role="tablist" aria-label="Secciones del radar">
+  <button id="tab-button-inbox" class="tab active" data-tab="inbox" role="tab" onclick="switchTab('inbox')"
+          aria-controls="tab-inbox" aria-selected="true">Bandeja</button>
+  <button id="tab-button-accounts" class="tab" data-tab="accounts" role="tab" onclick="switchTab('accounts')"
+          aria-controls="tab-accounts" aria-selected="false">Cuentas</button>
+  <button id="tab-button-system" class="tab" data-tab="system" role="tab" onclick="switchTab('system')"
+          aria-controls="tab-system" aria-selected="false">Sistema</button>
 </nav>
 
-<main>
+<main id="main-content">
+  <!-- ============================ BANDEJA ============================ -->
+  <section id="tab-inbox" role="tabpanel" aria-labelledby="tab-button-inbox">
+    <div class="hero panel">
+      <div class="hero-copy">
+        <p class="eyebrow accent-label">SEÑAL ENTRANTE</p>
+        <h2>Lo nuevo, sin ruido.</h2>
+        <p>Monitoreamos tus cuentas de X y dejamos aquí solo las publicaciones que todavía necesitan una decisión.</p>
+      </div>
+      <div class="hero-side">
+        <div id="monitor-state" class="monitor-state" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div>
+            <strong>Preparando monitor</strong>
+            <span>cargando estado…</span>
+          </div>
+        </div>
+        <p id="monitor-summary" class="small muted">Revisando configuración.</p>
+      </div>
+    </div>
 
-  <!-- ============ BANDEJA ============ -->
-  <section id="tab-inbox">
-    <div class="panel">
-      <h2>Publicaciones</h2>
-      <div class="row">
-        <div style="min-width:130px">
-          <label for="filter-view">Ver</label>
+    <div class="metric-strip" aria-label="Resumen del monitor">
+      <div class="metric-card metric-highlight">
+        <span class="metric-label">Nuevas</span>
+        <strong id="metric-new">—</strong>
+        <span class="metric-note">pendientes de revisar</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Cuentas activas</span>
+        <strong id="metric-accounts">—</strong>
+        <span id="metric-accounts-note" class="metric-note">sin datos</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Próxima revisión</span>
+        <strong id="metric-next">—</strong>
+        <span id="metric-last" class="metric-note">todavía no hay sondeo</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Telegram</span>
+        <strong id="metric-telegram">—</strong>
+        <span id="metric-telegram-note" class="metric-note">comprobando conexión</span>
+      </div>
+    </div>
+
+    <div class="panel filters-panel">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="eyebrow">BANDEJA</p>
+          <h2>Publicaciones detectadas</h2>
+        </div>
+        <div id="counts" class="count-summary" aria-live="polite"></div>
+      </div>
+      <div class="filters-grid">
+        <div class="field">
+          <label for="filter-view">Mostrar</label>
           <select id="filter-view">
-            <option value="pendientes" selected>Pendientes</option>
-            <option value="listas">Marcadas como listas</option>
+            <option value="pendientes" selected>Nuevas</option>
+            <option value="listas">Conservadas</option>
             <option value="todas">Todas</option>
           </select>
         </div>
-        <div style="min-width:130px">
+        <div class="field">
           <label for="filter-account">Cuenta</label>
-          <select id="filter-account"><option value="">Todas</option></select>
+          <select id="filter-account"><option value="">Todas las cuentas</option></select>
         </div>
-        <div style="min-width:100px">
-          <label for="filter-limit">Cantidad</label>
+        <div class="field field-limit">
+          <label for="filter-limit">Por página</label>
           <select id="filter-limit">
-            <option value="50">50</option>
-            <option value="100" selected>100</option>
-            <option value="300">300</option>
+            <option value="24">24</option>
+            <option value="48" selected>48</option>
+            <option value="96">96</option>
           </select>
         </div>
-        <div class="spacer"></div>
-        <div id="counts" class="row small muted"></div>
       </div>
-
-      <details class="help">
-        <summary>Qué hace cada botón</summary>
-        <p class="small muted" style="margin:8px 0 0">
-          <strong>Ver original</strong> abre la publicación en X.
-          <strong>Copiar enlace</strong> copia su URL al portapapeles.
-          <strong>Marcar listo</strong> la aparta: <strong>no se borra</strong> en la
-          limpieza automática, que se lleva lo demás pasado el tiempo de retención.
-          Una publicación marcada se puede desmarcar cuando quieras.
-        </p>
+      <div id="poller-state" class="monitor-line" aria-live="polite"></div>
+      <details class="help-details">
+        <summary>Cómo funciona esta bandeja</summary>
+        <p class="small muted">“Abrir en X” te lleva a la fuente. “Copiar enlace” guarda la URL. “Conservar” protege una publicación de la limpieza automática. El botón de Telegram aparecerá disponible cuando conectemos el flujo del bot.</p>
       </details>
-
-      <div id="poller-state" class="row small" style="margin-top:8px"></div>
     </div>
-    <div id="inbox" class="feed"></div>
+
+    <div id="inbox" class="feed" aria-live="polite" aria-busy="false"></div>
+    <div id="feed-pagination" class="pagination panel" hidden>
+      <div>
+        <strong id="feed-summary">—</strong>
+        <span class="small muted"> publicaciones cargadas</span>
+      </div>
+      <button id="btn-load-more" class="button secondary" type="button" onclick="loadMoreTweets()">Cargar más</button>
+    </div>
   </section>
 
-  <!-- ============ CUENTAS ============ -->
-  <section id="tab-accounts" hidden>
+  <!-- ============================ CUENTAS ============================ -->
+  <section id="tab-accounts" role="tabpanel" aria-labelledby="tab-button-accounts" hidden>
+    <div class="hero panel hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow accent-label">FUENTES</p>
+        <h2>Qué estamos vigilando</h2>
+        <p>Añade cuentas de X y el radar las revisará automáticamente según el intervalo configurado.</p>
+      </div>
+      <div class="hero-side hero-side-note">
+        <span class="signal-number" id="account-total">0</span>
+        <span class="small muted">cuentas en el radar</span>
+      </div>
+    </div>
+
     <div class="panel">
-      <h2>Añadir cuenta de X</h2>
-      <form id="form-account" class="row">
-        <div style="flex:1;min-width:220px">
-          <input id="account-handle" placeholder="@cuenta o https://x.com/cuenta" autocomplete="off">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="eyebrow">NUEVA FUENTE</p>
+          <h2>Añadir cuenta</h2>
         </div>
-        <button class="primary" type="submit">Añadir</button>
+      </div>
+      <form id="form-account" class="add-account-form" novalidate>
+        <label class="sr-only" for="account-handle">Cuenta de X</label>
+        <input id="account-handle" placeholder="@cuenta o enlace de X" autocomplete="off" inputmode="url">
+        <button class="button primary" type="submit">Añadir al radar</button>
       </form>
-      <p class="small muted" style="margin-bottom:0">
-        Se revisan solas según el intervalo configurado.
-      </p>
+      <p class="small muted form-note">Puedes pegar el usuario con o sin @, o una URL de X.</p>
     </div>
+
     <div class="panel">
-      <h2>Cuentas seguidas</h2>
-      <div id="accounts"></div>
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="eyebrow">CONFIGURACIÓN ACTIVA</p>
+          <h2>Cuentas seguidas</h2>
+        </div>
+        <span id="account-active-count" class="count-summary">—</span>
+      </div>
+      <div id="accounts" class="account-list"></div>
     </div>
   </section>
 
-  <!-- ============ AJUSTES ============ -->
-  <section id="tab-settings" hidden>
-    <div class="panel">
-      <h2>Limpieza automática</h2>
-      <p class="small muted" style="margin-top:0">
-        Pasado el tiempo de retención se borran las publicaciones y sus archivos.
-        <strong>Lo marcado como listo no se toca nunca.</strong> Aunque se borre
-        algo, se recuerda para que no vuelva a aparecer como nuevo.
-      </p>
-      <div id="maintenance-state" class="row" style="margin-bottom:12px"></div>
-      <div class="row">
-        <button id="btn-purge" class="accent">Limpiar ahora</button>
+  <!-- ============================ SISTEMA ============================ -->
+  <section id="tab-system" role="tabpanel" aria-labelledby="tab-button-system" hidden>
+    <div class="hero panel hero-compact">
+      <div class="hero-copy">
+        <p class="eyebrow accent-label">SISTEMA</p>
+        <h2>Salud del radar</h2>
+        <p>Estado de las fuentes, del reloj y de la retención. Los detalles técnicos viven aquí, fuera de la bandeja.</p>
       </div>
-      <div id="purge-result" class="small" style="margin-top:10px"></div>
+      <div id="system-health" class="health-stamp" aria-live="polite">Comprobando…</div>
     </div>
 
-    <div class="grid cols-2">
+    <div class="system-grid">
       <div class="panel">
-        <h2>Fuentes de publicaciones</h2>
-        <div id="providers"></div>
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">TELEGRAM</p>
+            <h2>Entrega automática</h2>
+          </div>
+        </div>
+        <div id="telegram-status" class="integration-status"></div>
+        <p class="small muted">La entrega de la tarjeta se conectará en la siguiente fase, cuando quede definido el bot que recibe el enlace y devuelve el PNG.</p>
       </div>
       <div class="panel">
-        <h2>Ajustes efectivos</h2>
-        <div id="settings"></div>
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">RETENCIÓN</p>
+            <h2>Limpieza automática</h2>
+          </div>
+        </div>
+        <div id="maintenance-state" class="maintenance-summary"></div>
+        <button id="btn-purge" class="button secondary" type="button" onclick="purge(this)">Limpiar ahora</button>
+        <div id="purge-result" class="small action-result" aria-live="polite"></div>
       </div>
     </div>
 
-    <div class="panel">
-      <h2>Últimos movimientos</h2>
+    <div class="system-grid">
+      <div class="panel">
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">FUENTE DE DATOS</p>
+            <h2>Proveedores</h2>
+          </div>
+        </div>
+        <div id="providers" class="provider-list"></div>
+      </div>
+      <div class="panel">
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">CONFIGURACIÓN</p>
+            <h2>Ajustes efectivos</h2>
+          </div>
+        </div>
+        <div id="settings" class="settings-list"></div>
+      </div>
+    </div>
+
+    <details class="panel log-details">
+      <summary><span>Últimos movimientos</span><span class="small muted">Diagnóstico del radar</span></summary>
       <div id="events" class="log"></div>
-    </div>
+    </details>
   </section>
-
 </main>
 
-<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="false"></div>
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog" id="confirm-form" novalidate>
+    <p class="eyebrow">CONFIRMAR ACCIÓN</p>
+    <h2 id="confirm-title">¿Eliminar esta cuenta?</h2>
+    <p id="confirm-message" class="muted">Dejará de vigilarse en el próximo sondeo.</p>
+    <div class="dialog-actions">
+      <button id="confirm-cancel" class="button secondary" value="cancel" type="submit">Cancelar</button>
+      <button id="confirm-accept" class="button danger" value="confirm" type="submit">Eliminar cuenta</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

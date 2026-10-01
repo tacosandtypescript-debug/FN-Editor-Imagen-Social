@@ -56,11 +56,24 @@ class DashboardService:
     def state(self) -> dict:
         settings = config.Settings()
         self.sync_clock()
+        telegram_configured = bool(
+            settings.telegram_bot_token and settings.telegram_chat_id
+        )
         return {
-            "app": "EditImg Dashboard",
+            "app": "EditImg Radar",
             "settings": config.redacted(settings),
             "accounts": self.store.list_accounts(),
             "counts": self.store.count_by_status(),
+            "telegram": {
+                "configured": telegram_configured,
+                "ready": False,
+                "phase": "phase-2",
+                "label": (
+                    "Configuración detectada; falta conectar el flujo"
+                    if telegram_configured
+                    else "Sin configurar"
+                ),
+            },
             "timeline_providers": [
                 status.__dict__ for status in timeline_providers.available_providers()
             ],

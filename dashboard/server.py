@@ -289,7 +289,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def get_tweets(self, query, *groups) -> None:
         status = _first(query, "status") or None
         handle = _first(query, "handle") or None
-        limit = _int_param(query, "limit", 200)
+        limit = max(1, min(_int_param(query, "limit", 48), 100))
         offset = _int_param(query, "offset", 0)
         # Por defecto solo se muestra lo pendiente: lo ya procesado y lo
         # duplicado dejan de estorbar.
@@ -298,10 +298,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             status=status,
             source_handle=handle,
             pending_only=pending_only,
-            limit=limit,
+            limit=limit + 1,
             offset=offset,
         )
-        self._send_json({"tweets": tweets, "counts": self.service.store.count_by_status()})
+        has_more = len(tweets) > limit
+        visible = tweets[:limit]
+        self._send_json(
+            {
+                "tweets": visible,
+                "counts": self.service.store.count_by_status(),
+                "has_more": has_more,
+                "next_offset": offset + len(visible),
+            }
+        )
 
     def get_maintenance(self, query, *groups) -> None:
         self._send_json(self.service.maintenance_state())
