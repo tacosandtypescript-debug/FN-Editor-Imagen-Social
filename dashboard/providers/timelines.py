@@ -21,6 +21,7 @@ import html
 import json
 import re
 import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -91,43 +92,135 @@ els => els.map(el => {
 # Nitter RSS
 # ----------------------------------------------------------------------
 class NitterTimeline:
-    """Descubre publicaciones leyendo el RSS de instancias Nitter."""
+    """Descubre publicaciones leyendo el RSS de instancias Nitter.
+
+    Las instancias son servicios de terceros y caen a menudo: de las tres
+    configuradas en este proyecto, en un momento dado solo respondía una. Por
+    eso, si fallan todas, se consulta el **registro público de instancias** y se
+    prueban las que declaren RSS disponible, validándolas en vivo (el registro
+    afirma que funcionan, no lo garantiza).
+    """
 
     name = "nitter"
+    #: Cuánto se recuerda la lista descubierta antes de volver a consultarla.
+    DISCOVERY_TTL_SECONDS = 6 * 3600
+    REGISTRY_TIMEOUT_SECONDS = 20
+    INSTANCE_TIMEOUT_SECONDS = 25
 
     def __init__(self, instances: tuple[str, ...] | None = None) -> None:
         settings = config.Settings()
+        self.settings = settings
         self.instances = tuple(instances or settings.nitter_instances)
         self._preferred: str | None = None
+        self._discovered: list[str] = []
+        self._discovered_at: float = 0.0
 
     def status(self) -> ProviderStatus:
-        return ProviderStatus(
-            self.name,
-            bool(self.instances),
-            f"{len(self.instances)} instancia(s) configurada(s); son servicios de terceros y pueden caer",
+        detail = (
+            f"{len(self.instances)} instancia(s) configurada(s)"
+            + (f" + {len(self._discovered)} descubierta(s)" if self._discovered else "")
+            + "; son servicios de terceros y pueden caer"
         )
+        return ProviderStatus(self.name, bool(self.instances) or bool(self._discovered), detail)
+
+    # ------------------------------------------------------------------
+    def candidates(self) -> list[str]:
+        """Orden de intentos: la que funcionó, las configuradas y las descubiertas."""
+        ordered: list[str] = []
+        for base in (self._preferred, *self.instances, *self._discovered):
+            if base and base not in ordered:
+                ordered.append(base)
+        return ordered
+
+    def discover(self, force: bool = False) -> list[str]:
+        """Consulta el registro público y devuelve instancias con RSS.
+
+        Se guarda en caché varias horas porque el registro limita las
+        peticiones (responde 429 si se le insiste).
+        """
+        if not self.settings.nitter_discovery:
+            return []
+        fresh = (time.time() - self._discovered_at) < self.DISCOVERY_TTL_SECONDS
+        if self._discovered and fresh and not force:
+            return list(self._discovered)
+
+        try:
+            body = _http_get(
+                self.settings.nitter_registry_url,
+                accept="application/json",
+                timeout=self.REGISTRY_TIMEOUT_SECONDS,
+            )
+            payload = json.loads(body.decode("utf-8"))
+        except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
+            return list(self._discovered)
+
+        hosts = payload.get("hosts") if isinstance(payload, dict) else None
+        if not isinstance(hosts, list):
+            return list(self._discovered)
+
+        minimum = self.settings.nitter_min_points
+        found: list[str] = []
+        for entry in hosts:
+            if not isinstance(entry, dict) or not entry.get("rss"):
+                continue
+            try:
+                points = int(entry.get("points") or 0)
+            except (TypeError, ValueError):
+                continue
+            if points < minimum:
+                continue
+            url = str(entry.get("url") or "").strip().rstrip("/")
+            if url.startswith("http") and url not in found:
+                found.append(url)
+
+        self._discovered = found
+        self._discovered_at = time.time()
+        return list(found)
 
     def fetch(self, handle: str) -> list[dict]:
-        if not self.instances:
-            raise ProviderError("no hay instancias Nitter configuradas")
-        ordered = list(self.instances)
-        if self._preferred and self._preferred in ordered:
-            ordered.remove(self._preferred)
-            ordered.insert(0, self._preferred)
+        if not self.candidates() and not self.discover(force=True):
+            raise ProviderError("no hay instancias Nitter disponibles")
 
         errors: list[str] = []
-        for base in ordered:
-            base = base.rstrip("/")
-            url = f"{base}/{handle}/rss"
-            try:
-                body = _http_get(url, accept="application/rss+xml, application/xml")
-                tweets = parse_nitter_rss(body, source_handle=handle)
-            except (HTTPError, URLError, ET.ParseError, OSError, ValueError) as exc:
-                errors.append(f"{base}: {str(exc)[:80]}")
-                continue
-            self._preferred = base
-            return [tweet.as_dict() for tweet in tweets]
-        raise ProviderError("ninguna instancia Nitter respondió (" + "; ".join(errors) + ")")
+        tried: list[str] = []
+
+        def attempt(bases: list[str]) -> list[dict] | None:
+            for base in bases:
+                if base in tried:
+                    continue
+                tried.append(base)
+                url = f"{base.rstrip('/')}/{handle}/rss"
+                try:
+                    body = _http_get(
+                        url,
+                        accept="application/rss+xml, application/xml",
+                        timeout=self.INSTANCE_TIMEOUT_SECONDS,
+                    )
+                    tweets = parse_nitter_rss(body, source_handle=handle)
+                except (HTTPError, URLError, ET.ParseError, OSError, ValueError) as exc:
+                    errors.append(f"{base}: {str(exc)[:70]}")
+                    continue
+                if not tweets:
+                    # Responder sin publicaciones también es un fallo blando:
+                    # otra instancia puede tener la cuenta indexada.
+                    errors.append(f"{base}: sin publicaciones")
+                    continue
+                self._preferred = base
+                return [tweet.as_dict() for tweet in tweets]
+            return None
+
+        result = attempt(self.candidates())
+        if result is not None:
+            return result
+
+        # Fallaron todas las conocidas: se buscan instancias nuevas y se prueban.
+        discovered = self.discover(force=True)
+        result = attempt(discovered)
+        if result is not None:
+            return result
+
+        detail = "; ".join(errors[-5:]) or "sin instancias que responderan"
+        raise ProviderError(f"ninguna instancia Nitter respondió ({detail})")
 
 
 def parse_nitter_rss(body: bytes | str, source_handle: str) -> list[TweetRecord]:
@@ -289,13 +382,30 @@ class BrowserTimeline:
         return results
 
     def _read_handle(self, page, handle: str) -> list[dict]:
-        """Extrae las publicaciones de una cuenta usando una página ya abierta."""
+        """Extrae las publicaciones de una cuenta usando una página ya abierta.
+
+        Se espera a que ocurran las cosas (aparecen los artículos, crece la
+        lista al desplazar) en lugar de dormir un tiempo fijo. Medido en este
+        equipo: los primeros artículos están listos en ~0,3 s, mientras que las
+        esperas fijas anteriores sumaban 14 s por cuenta sin necesidad.
+        """
         url = f"https://x.com/{handle}"
         page.goto(url, wait_until="domcontentloaded", timeout=self.settings.browser_timeout_ms)
-        page.wait_for_timeout(self.settings.browser_settle_ms)
+        try:
+            page.wait_for_selector("article", timeout=self.settings.browser_article_timeout_ms)
+        except Exception:  # noqa: BLE001 - se decide más abajo si hay o no artículos
+            pass
+        # Margen corto para que termine de asentarse el render.
+        page.wait_for_timeout(300)
+
         for _ in range(max(0, self.settings.browser_max_scrolls)):
+            before = _article_count(page)
             page.mouse.wheel(0, 4000)
-            page.wait_for_timeout(2500)
+            grown = _wait_for_more_articles(page, before, self.settings.browser_scroll_wait_ms)
+            if grown <= before:
+                # Ya no carga más: seguir desplazando solo hace perder tiempo.
+                break
+
         raw = page.locator("article").evaluate_all(EXTRACT_JS)
         if _looks_blocked(page):
             raise ProviderError(
@@ -451,6 +561,34 @@ def _notify(callback, payload: dict) -> None:
         callback(payload)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _article_count(page) -> int:
+    try:
+        return page.locator("article").count()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _wait_for_more_articles(page, previous: int, timeout_ms: int) -> int:
+    """Espera a que aparezcan más artículos tras desplazar, o se rinde.
+
+    Es mejor que dormir un tiempo fijo: si la lista ya no crece, se sigue
+    adelante de inmediato en vez de perder el tiempo esperando de más.
+    """
+    import time as _time
+
+    deadline = _time.time() + max(200, int(timeout_ms)) / 1000.0
+    count = previous
+    while _time.time() < deadline:
+        count = _article_count(page)
+        if count > previous:
+            return count
+        try:
+            page.wait_for_timeout(200)
+        except Exception:  # noqa: BLE001
+            break
+    return count
 
 
 def fetch_timelines_batch(

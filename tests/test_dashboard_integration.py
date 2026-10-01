@@ -390,6 +390,18 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertTrue(tweet["posted_relative"])
         self.assertTrue(tweet["posted_absolute"])
 
+    def test_the_api_exposes_the_raw_timestamp_the_client_needs(self):
+        """El navegador recalcula «hace X» con `posted_at`, sin volver a pedir nada.
+
+        Si este campo desapareciera, las horas relativas se quedarían
+        congeladas otra vez: es el dato del que depende el refresco local.
+        """
+        tweet = self.service.list_tweets(limit=5)[0]
+        self.assertIn("posted_at", tweet)
+        self.assertTrue(tweet["posted_at"], "hace falta la marca original")
+        # Y la fecha de respaldo, para las publicaciones sin hora de origen.
+        self.assertIn("fetched_at", tweet)
+
     def test_listed_tweets_expose_the_editor_link_once_processed(self):
         without = self.service.list_tweets(limit=5)[0]
         self.assertFalse(without["has_card"])

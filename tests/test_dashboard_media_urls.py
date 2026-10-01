@@ -1,0 +1,173 @@
+"""Tests de las URL de medios y del enriquecimiento selectivo.
+
+Cubren dos optimizaciones medidas en este equipo:
+
+* mostrar miniaturas reducidas en lugar del archivo original (14 KB contra
+  99 KB por imagen), y
+* no volver a preguntar a los mirrors por datos que la fuente ya trae.
+"""
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from dashboard import urls  # noqa: E402
+
+
+class ThumbnailTests(unittest.TestCase):
+    BASE = "https://pbs.twimg.com/media/HTh1ytnXQAASGGE.jpg"
+
+    def test_replaces_the_requested_size(self):
+        result = urls.thumbnail_url(self.BASE)
+        self.assertIn("name=360x360", result)
+        self.assertNotIn("name=orig", result)
+
+    def test_keeps_the_path_and_host(self):
+        result = urls.thumbnail_url(self.BASE)
+        self.assertTrue(result.startswith("https://pbs.twimg.com/media/HTh1ytnXQAASGGE.jpg"))
+
+    def test_overrides_an_existing_size_instead_of_duplicating_it(self):
+        result = urls.thumbnail_url(f"{self.BASE}?name=orig")
+        self.assertEqual(result.count("name="), 1)
+        self.assertIn("name=360x360", result)
+
+    def test_adds_format_when_the_path_has_no_extension(self):
+        """Regresión: sin `format`, el CDN responde 404 si la ruta no lleva extensión."""
+        result = urls.thumbnail_url("https://pbs.twimg.com/media/HTh1ytnXQAASGGE")
+        self.assertIn("format=jpg", result)
+        self.assertIn("name=360x360", result)
+
+    def test_other_domains_are_left_alone(self):
+        for raw in (
+            "https://example.com/foto.jpg",
+            "https://i.imgur.com/abc.png?name=orig",
+            "",
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(urls.thumbnail_url(raw), raw)
+
+    def test_custom_size(self):
+        self.assertIn("name=120x120", urls.thumbnail_url(self.BASE, size=120))
+
+    def test_full_size_helper(self):
+        result = urls.full_size_url(f"{self.BASE}?name=small")
+        self.assertEqual(result.count("name="), 1)
+        self.assertIn("name=orig", result)
+
+    def test_is_twitter_media(self):
+        self.assertTrue(urls.is_twitter_media(self.BASE))
+        self.assertTrue(urls.is_twitter_media("https://video.twimg.com/x.mp4"))
+        self.assertFalse(urls.is_twitter_media("https://pbs.twimg.com.evil.com/x.jpg"))
+        self.assertFalse(urls.is_twitter_media("https://example.com/x.jpg"))
+
+    def test_thumbnails_maps_a_list(self):
+        result = urls.thumbnails([self.BASE, "https://example.com/a.jpg"])
+        self.assertEqual(len(result), 2)
+        self.assertIn("name=360x360", result[0])
+        self.assertEqual(result[1], "https://example.com/a.jpg")
+
+    def test_the_thumbnail_is_much_smaller_than_the_default(self):
+        """La razón de ser: se pide un cuadrado pequeño, no el archivo entero."""
+        thumb = urls.thumbnail_url(self.BASE)
+        self.assertIn("360x360", thumb)
+        self.assertNotEqual(thumb, self.BASE)
+
+
+class SelectiveEnrichmentTests(unittest.TestCase):
+    """No se pregunta a los mirrors por lo que la fuente ya entregó.
+
+    Medido: cada consulta de enriquecido cuesta ~0,34 s y los mirrors acaban
+    respondiendo 429. Nitter ya entrega fecha y medios en su RSS.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        from dashboard import config
+        from dashboard.service import DashboardService
+        from dashboard.store import Store
+
+        self._temporary = tempfile.TemporaryDirectory()
+        work = Path(self._temporary.name)
+        self._originals = {
+            name: getattr(config, name)
+            for name in ("VAR_DIR", "DB_PATH", "MEDIA_DIR", "CARDS_DIR", "PROFILES_DIR", "LOGS_DIR")
+        }
+        config.VAR_DIR = work
+        config.DB_PATH = work / "dashboard.sqlite3"
+        config.MEDIA_DIR = work / "media"
+        config.CARDS_DIR = work / "cards"
+        config.PROFILES_DIR = work / "profiles"
+        config.LOGS_DIR = work / "logs"
+        config.ensure_directories()
+
+        self.service = DashboardService(store=Store(config.DB_PATH))
+        self.enriched: list[str] = []
+
+        def fake_enrich(tweets):
+            self.enriched.extend(tweet["tweet_id"] for tweet in tweets)
+
+        self.service._enrich = fake_enrich  # type: ignore[method-assign]
+
+    def tearDown(self):
+        from dashboard import config
+
+        for name, value in self._originals.items():
+            setattr(config, name, value)
+        self._temporary.cleanup()
+
+    def _tweet(self, tweet_id, posted_at, media):
+        return {
+            "tweet_id": tweet_id,
+            "source_handle": "cuenta",
+            "text": f"noticia {tweet_id}",
+            "posted_at": posted_at,
+            "media": media,
+        }
+
+    def test_only_tweets_missing_date_or_media_are_enriched(self):
+        tweets = [
+            self._tweet("completo", "2026-10-01T07:00:00+00:00", ["https://x/a.jpg"]),
+            self._tweet("sin-fecha", None, ["https://x/b.jpg"]),
+            self._tweet("sin-media", "2026-10-01T07:00:00+00:00", []),
+            self._tweet("sin-nada", None, []),
+        ]
+        self.service._record_success("cuenta", tweets, "nitter")
+
+        self.assertEqual(sorted(self.enriched), ["sin-fecha", "sin-media", "sin-nada"])
+        # El que ya venía completo no se consulta.
+        self.assertNotIn("completo", self.enriched)
+
+    def test_a_fully_provided_batch_costs_no_extra_requests(self):
+        tweets = [
+            self._tweet(f"t{i}", "2026-10-01T07:00:00+00:00", ["https://x/a.jpg"])
+            for i in range(20)
+        ]
+        self.service._record_success("cuenta", tweets, "nitter")
+        self.assertEqual(self.enriched, [], "20 publicaciones no deberían costar 20 peticiones")
+        # Y aun así entran todas.
+        self.assertEqual(len(self.service.list_tweets(limit=50)), 20)
+
+    def test_tweets_are_still_stored_with_their_media(self):
+        original = "https://pbs.twimg.com/media/AAA111.jpg"
+        tweets = [self._tweet("uno", "2026-10-01T07:00:00+00:00", [original])]
+        self.service._record_success("cuenta", tweets, "nitter")
+        stored = self.service.get_tweet("uno")
+        # El original se conserva intacto: es el que se usa al componer.
+        self.assertEqual(stored["media"], [original])
+        # Y se añade la miniatura reducida para mostrarla.
+        self.assertIn("name=360x360", stored["thumbs"][0])
+
+    def test_a_non_twitter_url_is_shown_as_is(self):
+        tweets = [self._tweet("dos", "2026-10-01T07:00:00+00:00", ["https://example.com/a.jpg"])]
+        self.service._record_success("cuenta", tweets, "nitter")
+        stored = self.service.get_tweet("dos")
+        self.assertEqual(stored["thumbs"], ["https://example.com/a.jpg"])
+
+
+if __name__ == "__main__":
+    unittest.main()

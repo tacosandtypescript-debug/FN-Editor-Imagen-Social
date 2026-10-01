@@ -11,6 +11,10 @@ const app = {
   busy: false,
   //: Día actual en la hora local del usuario, según el reloj verificado.
   today: null,
+  //: Hora verificada del servidor y lectura del reloj del navegador en ese
+  //: momento. Con las dos se puede avanzar la hora sin volver a preguntar.
+  verifiedNowMs: null,
+  clientAtMs: null,
 };
 
 /* ------------------------------------------------------------------ */
@@ -59,6 +63,66 @@ function formatDate(value) {
   });
 }
 
+/**
+ * Hora actual según el reloj **verificado** del servidor, avanzada con el
+ * reloj del navegador desde la última consulta.
+ *
+ * Es importante no usar `Date.now()` a secas: el reloj de esta máquina iba
+ * seis horas desviado y las horas habrían salido mal.
+ */
+function verifiedNowMs() {
+  if (app.verifiedNowMs === null) return Date.now();
+  return app.verifiedNowMs + (Date.now() - app.clientAtMs);
+}
+
+function rememberServerClock(clock) {
+  if (!clock || !clock.now_utc) return;
+  const parsed = new Date(clock.now_utc);
+  if (Number.isNaN(parsed.getTime())) return;
+  app.verifiedNowMs = parsed.getTime();
+  app.clientAtMs = Date.now();
+}
+
+/** Mismas reglas que el servidor: «hace 2 h 15 min», «hace 3 días»… */
+function humanizeSince(isoDate, nowMs) {
+  if (!isoDate) return "";
+  const then = new Date(isoDate).getTime();
+  if (Number.isNaN(then)) return "";
+  let seconds = Math.floor(((nowMs === undefined ? verifiedNowMs() : nowMs) - then) / 1000);
+  if (seconds < 0) seconds = 0;              // reloj desviado: nunca «en el futuro»
+  if (seconds < 60) return "hace unos segundos";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes ? `hace ${hours} h ${restMinutes} min` : `hace ${hours} h`;
+  const days = Math.floor(seconds / 86400);
+  if (days === 1) return "hace 1 día";
+  if (days < 30) return `hace ${days} días`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return "hace 1 mes";
+  if (months < 12) return `hace ${months} meses`;
+  const years = Math.floor(days / 365);
+  return years <= 1 ? "hace 1 año" : `hace ${years} años`;
+}
+
+/**
+ * Vuelve a pintar las horas relativas sin pedir nada al servidor.
+ *
+ * Antes se quedaban congeladas: el refresco periódico actualizaba contadores y
+ * bitácora, pero no la lista, así que una publicación se quedaba en «hace 17
+ * minutos» indefinidamente.
+ */
+function tickRelativeTimes() {
+  const nowMs = verifiedNowMs();
+  for (const node of document.querySelectorAll("[data-posted]")) {
+    const iso = node.getAttribute("data-posted");
+    if (!iso) continue;
+    const label = humanizeSince(iso, nowMs);
+    if (label && node.textContent !== label) node.textContent = label;
+  }
+}
+
 function withBusy(button, label, task) {
   const original = button ? button.textContent : null;
   if (button) {
@@ -84,6 +148,7 @@ async function loadState() {
   // «Hoy» y «ayer» se calculan con la hora verificada, no con la del navegador:
   // el reloj de la máquina puede estar desviado.
   app.today = ((state.clock && state.clock.now_local) || "").slice(0, 10) || null;
+  rememberServerClock(state.clock);
   renderProviderPills(state);
   renderCounts(state.counts);
   renderAccounts(state.accounts);
@@ -470,7 +535,9 @@ function dayLabel(shortDate) {
 }
 
 function tweetCard(tweet) {
-  const thumbs = (tweet.media || []).slice(0, 6).map((url) => (
+  // Se usan las miniaturas reducidas: 14 KB frente a 99 KB por imagen.
+  const sources = tweet.thumbs && tweet.thumbs.length ? tweet.thumbs : (tweet.media || []);
+  const thumbs = sources.slice(0, 6).map((url) => (
     `<img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
           onerror="this.style.display='none'">`
   )).join("");
@@ -500,7 +567,7 @@ function tweetCard(tweet) {
           ? `<span class="muted">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}
       </div>
       <div class="when">
-        <strong>${escapeHtml(tweet.posted_relative || "sin fecha")}</strong>
+        <strong data-posted="${escapeHtml(tweet.posted_at || tweet.fetched_at || "")}">${escapeHtml(tweet.posted_relative || "sin fecha")}</strong>
         <span class="muted">· ${escapeHtml(tweet.posted_absolute || "")}</span>
         ${tweet.date_is_estimated ? `<span class="muted" title="La fuente no dio la fecha exacta; se usa la de descarga.">(aprox.)</span>` : ""}
       </div>
@@ -610,7 +677,7 @@ async function openTweet(tweetId) {
     </div>
     <div class="text">${escapeHtml(tweet.text || "(sin texto)")}</div>
     <div class="thumbs" style="margin-top:9px">
-      ${(tweet.media || []).slice(0, 8).map((url) => (
+      ${((tweet.thumbs && tweet.thumbs.length ? tweet.thumbs : (tweet.media || [])).slice(0, 8)).map((url) => (
         `<img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
               onerror="this.style.display='none'">`
       )).join("")}
@@ -952,9 +1019,18 @@ async function refreshAll() {
 }
 
 refreshAll();
+// Refresco ligero: contadores, bitácora, estado del sondeo y **las horas
+// relativas**, que antes se quedaban congeladas.
 setInterval(() => {
   api("/api/state").then((state) => {
+    rememberServerClock(state.clock);
     renderCounts(state.counts);
     renderEvents(state.events);
+    renderPollerState(state);
+    renderMaintenance(state);
+    tickRelativeTimes();
   }).catch(() => {});
 }, 15000);
+
+// Las etiquetas de tiempo avanzan por su cuenta, sin pedir nada al servidor.
+setInterval(tickRelativeTimes, 20000);

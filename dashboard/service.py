@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import config
 from . import timefmt
+from . import urls
 from .clock import CLOCK
 from .pipeline import cards as cards_pipeline
 from .pipeline import media as media_pipeline
@@ -23,6 +24,10 @@ from .store import Store
 #: Máximo de publicaciones nuevas que se enriquecen por sondeo, para no
 #: encadenar demasiadas peticiones a los mirrors públicos.
 ENRICH_LIMIT = 25
+
+#: Por debajo de esto, el navegador está devolviendo la vista previa de X y no
+#: el perfil completo, casi siempre por falta de sesión iniciada.
+BROWSER_PREVIEW_LIMIT = 6
 
 
 class DashboardError(RuntimeError):
@@ -235,7 +240,16 @@ class DashboardService:
         # evita repetir consultas a los mirrors tras una limpieza.
         unseen = set(self.store.filter_unseen(tweet["tweet_id"] for tweet in tweets))
         fresh = [tweet for tweet in tweets if tweet["tweet_id"] in unseen][:ENRICH_LIMIT]
-        self._enrich(fresh)
+        # Y solo las que no traen ya la fecha y los medios. Nitter entrega las
+        # dos cosas en su RSS, así que preguntar otra vez por ellas era gastar
+        # una petición por publicación (0,34 s) y arriesgarse al 429.
+        self._enrich(
+            [
+                tweet
+                for tweet in fresh
+                if not (tweet.get("posted_at") and tweet.get("media"))
+            ]
+        )
 
         settings = config.Settings()
         result = self.store.upsert_tweets(
@@ -256,6 +270,18 @@ class DashboardService:
             f"@{handle}: {inserted} nueva(s), {result['duplicates']} ya vista(s){replay} "
             f"vía {provider_name}{note}"
         )
+        # X, sin sesión iniciada, solo muestra una vista previa de cada perfil
+        # (unas cinco publicaciones) y no carga más por mucho que se desplace.
+        # Conviene decirlo en vez de aceptar el resultado truncado en silencio.
+        if str(provider_name or "").startswith("browser") and len(tweets) <= BROWSER_PREVIEW_LIMIT:
+            self.store.log(
+                f"@{handle}: el navegador solo devolvió {len(tweets)} publicación(es). "
+                "Sin sesión iniciada, X corta la vista previa del perfil; Nitter da "
+                "muchas más. Inicia sesión en el perfil del navegador si quieres "
+                "usarlo como fuente principal.",
+                level="warn",
+                tweet_id=None,
+            )
         return {
             "handle": handle,
             "ok": True,
@@ -304,12 +330,22 @@ class DashboardService:
             timefmt.decorate_tweet(tweet, CLOCK) for tweet in self.store.list_tweets(**kwargs)
         ]
         for tweet in tweets:
+            self._decorate_media(tweet)
             card_id = cards.get(tweet["tweet_id"])
             tweet["card_id"] = card_id
             tweet["has_card"] = card_id is not None
             if card_id:
                 tweet["editor_url"] = f"/editor.html?card={card_id}"
         return tweets
+
+    @staticmethod
+    def _decorate_media(tweet: dict) -> None:
+        """Añade la lista de miniaturas reducidas junto a los medios originales.
+
+        La lista `media` se conserva tal cual porque es la que se usa al
+        componer; `thumbs` es solo para mostrar, y pesa siete veces menos.
+        """
+        tweet["thumbs"] = urls.thumbnails(tweet.get("media") or [])
 
     def maintenance(self, force: bool = False) -> dict:
         """Limpia la bandeja según la retención configurada.
@@ -358,7 +394,9 @@ class DashboardService:
         tweet = self.store.get_tweet(tweet_id)
         if not tweet:
             raise DashboardError(f"no existe la publicación {tweet_id}")
-        return timefmt.decorate_tweet(tweet, CLOCK)
+        decorated = timefmt.decorate_tweet(tweet, CLOCK)
+        self._decorate_media(decorated)
+        return decorated
 
     def set_tweet_status(self, tweet_id: str, status: str) -> dict:
         self.get_tweet(tweet_id)

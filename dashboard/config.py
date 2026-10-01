@@ -132,8 +132,12 @@ class Settings:
     )
 
     # --- Descubrimiento de publicaciones -------------------------------
+    #: `nitter` por defecto: medido en este equipo da 20 publicaciones por
+    #: cuenta frente a las 5 del navegador sin sesión, y algo más rápido. El
+    #: navegador queda como respaldo automático para las cuentas que Nitter no
+    #: indexa.
     timeline_provider: str = field(
-        default_factory=lambda: _env("DASHBOARD_TIMELINE_PROVIDER", "browser")
+        default_factory=lambda: _env("DASHBOARD_TIMELINE_PROVIDER", "nitter")
     )
     poll_interval_seconds: int = field(
         default_factory=lambda: _env_int("DASHBOARD_POLL_INTERVAL", 900)
@@ -155,6 +159,20 @@ class Settings:
     nitter_instances: tuple[str, ...] = field(
         default_factory=lambda: _env_list("DASHBOARD_NITTER_INSTANCES", DEFAULT_NITTER_INSTANCES)
     )
+    #: Registro público de instancias Nitter. Se consulta solo cuando fallan
+    #: las configuradas, para no depender de un único dominio.
+    nitter_registry_url: str = field(
+        default_factory=lambda: _env(
+            "DASHBOARD_NITTER_REGISTRY", "https://status.d420.de/api/v1/instances"
+        )
+    )
+    nitter_discovery: bool = field(
+        default_factory=lambda: _env_bool("DASHBOARD_NITTER_DISCOVERY", True)
+    )
+    #: Puntos mínimos de salud para aceptar una instancia descubierta.
+    nitter_min_points: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_NITTER_MIN_POINTS", 40)
+    )
     browser_headless: bool = field(
         default_factory=lambda: _env_bool("DASHBOARD_BROWSER_HEADLESS", False)
     )
@@ -166,6 +184,15 @@ class Settings:
     )
     browser_settle_ms: int = field(
         default_factory=lambda: _env_int("DASHBOARD_BROWSER_SETTLE_MS", 9000)
+    )
+    #: Cuánto esperar a que aparezcan los primeros artículos de una cuenta.
+    browser_article_timeout_ms: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_BROWSER_ARTICLE_TIMEOUT_MS", 15000)
+    )
+    #: Cuánto esperar a que la lista crezca tras desplazar. Si no crece, se
+    #: sigue adelante en vez de agotar el tiempo.
+    browser_scroll_wait_ms: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_BROWSER_SCROLL_WAIT_MS", 3000)
     )
     browser_max_scrolls: int = field(
         default_factory=lambda: _env_int("DASHBOARD_BROWSER_MAX_SCROLLS", 2)
@@ -295,6 +322,8 @@ def redacted(settings: Settings) -> dict:
         "retention_hours": settings.retention_hours,
         "duplicate_window_days": settings.duplicate_window_days,
         "nitter_instances": list(settings.nitter_instances),
+        "nitter_discovery": settings.nitter_discovery,
+        "nitter_min_points": settings.nitter_min_points,
         "browser_headless": settings.browser_headless,
         "browser_channel": settings.browser_channel,
         "x_api_bearer_set": bool(settings.x_api_bearer),

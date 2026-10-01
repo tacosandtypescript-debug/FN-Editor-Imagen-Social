@@ -12,7 +12,48 @@ const editor = {
   cardId: null,
   card: null,
   tweet: null,
+  verifiedNowMs: null,
+  clientAtMs: null,
 };
+
+/** Hora verificada del servidor avanzada con el reloj del navegador. */
+function verifiedNowMs() {
+  if (editor.verifiedNowMs === null) return Date.now();
+  return editor.verifiedNowMs + (Date.now() - editor.clientAtMs);
+}
+
+/** Mismas reglas que el servidor: «hace 2 h 15 min», «hace 3 días»… */
+function humanizeSince(isoDate, nowMs) {
+  if (!isoDate) return "";
+  const then = new Date(isoDate).getTime();
+  if (Number.isNaN(then)) return "";
+  let seconds = Math.floor(((nowMs === undefined ? verifiedNowMs() : nowMs) - then) / 1000);
+  if (seconds < 0) seconds = 0;
+  if (seconds < 60) return "hace unos segundos";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes ? `hace ${hours} h ${restMinutes} min` : `hace ${hours} h`;
+  const days = Math.floor(seconds / 86400);
+  if (days === 1) return "hace 1 día";
+  if (days < 30) return `hace ${days} días`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return "hace 1 mes";
+  if (months < 12) return `hace ${months} meses`;
+  const years = Math.floor(days / 365);
+  return years <= 1 ? "hace 1 año" : `hace ${years} años`;
+}
+
+function tickRelativeTimes() {
+  const nowMs = verifiedNowMs();
+  for (const node of document.querySelectorAll("[data-posted]")) {
+    const iso = node.getAttribute("data-posted");
+    if (!iso) continue;
+    const label = humanizeSince(iso, nowMs);
+    if (label && node.textContent !== label) node.textContent = label;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Utilidades                                                          */
@@ -74,6 +115,13 @@ async function loadClock() {
   try {
     const state = await api("/api/state");
     const clock = state.clock || {};
+    if (clock.now_utc) {
+      const parsed = new Date(clock.now_utc);
+      if (!Number.isNaN(parsed.getTime())) {
+        editor.verifiedNowMs = parsed.getTime();
+        editor.clientAtMs = Date.now();
+      }
+    }
     const skewed = Math.abs(clock.offset_seconds || 0) > 60;
     const pill = $("clock-pill");
     pill.className = `pill ${skewed ? "warn" : "ok"}`;
@@ -172,14 +220,16 @@ async function load() {
 }
 
 function renderTweet(tweet) {
-  const media = (tweet.media || []).slice(0, 6).map((url) => (
+  // Miniaturas reducidas: pesan siete veces menos que el archivo original.
+  const sources = tweet.thumbs && tweet.thumbs.length ? tweet.thumbs : (tweet.media || []);
+  const media = sources.slice(0, 6).map((url) => (
     `<img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
           onerror="this.style.display='none'">`
   )).join("");
   $("tweet-info").innerHTML = `
     <div class="row small" style="margin-bottom:6px">
       <span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>
-      <strong>${escapeHtml(tweet.posted_relative || "")}</strong>
+      <strong data-posted="${escapeHtml(tweet.posted_at || tweet.fetched_at || "")}">${escapeHtml(tweet.posted_relative || "")}</strong>
       <span class="muted">· ${escapeHtml(tweet.posted_absolute || "")}</span>
     </div>
     <div style="white-space:pre-wrap">${escapeHtml(tweet.text || "(sin texto)")}</div>
@@ -289,3 +339,6 @@ $("btn-back").addEventListener("click", () => window.close());
 fillStyles();
 loadClock();
 load();
+
+// Las horas relativas avanzan solas, igual que en la bandeja.
+setInterval(tickRelativeTimes, 20000);
