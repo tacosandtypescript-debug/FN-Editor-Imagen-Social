@@ -62,14 +62,17 @@
     <div class="panel">
       <h2>Bandeja de publicaciones</h2>
       <div class="row">
-        <div style="min-width:190px">
-          <label for="filter-pending">Mostrar</label>
+        <!-- Etiquetas cortas a propósito: con «Solo pendientes (oculta
+             procesadas)» el selector pedía toda la fila él solo y empujaba los
+             demás hacia abajo. -->
+        <div style="min-width:120px">
+          <label for="filter-pending">Ver</label>
           <select id="filter-pending">
-            <option value="1" selected>Solo pendientes (oculta procesadas)</option>
-            <option value="0">Todas, incluidas procesadas</option>
+            <option value="1" selected>Solo pendientes</option>
+            <option value="0">Todas</option>
           </select>
         </div>
-        <div style="min-width:190px">
+        <div style="min-width:120px">
           <label for="filter-status">Estado</label>
           <select id="filter-status">
             <option value="todos">Todos</option>
@@ -98,14 +101,17 @@
         <div class="spacer"></div>
         <div id="counts" class="row small muted"></div>
       </div>
-      <p class="small muted" style="margin-bottom:0">
-        El sistema <strong>no</strong> convierte nada automáticamente: primero trae las
-        publicaciones y tú eliges cuáles se convierten en tarjeta. La lista va de
-        <strong>más reciente a más antigua</strong>, agrupada por día. Lo que ya
-        procesaste desaparece de la vista, y cada publicación se recuerda para
-        <strong>no volver a aparecer</strong> aunque se limpie.
-      </p>
-      <div id="poller-state" class="row small" style="margin-top:10px"></div>
+      <details class="help">
+        <summary>Cómo funciona la bandeja</summary>
+        <p class="small muted" style="margin:8px 0 0">
+          El sistema <strong>no</strong> convierte nada automáticamente: primero trae las
+          publicaciones y tú eliges cuáles se convierten en tarjeta. La lista va de
+          <strong>más reciente a más antigua</strong>, agrupada por día. Lo que ya
+          procesaste desaparece de la vista, y cada publicación se recuerda para
+          <strong>no volver a aparecer</strong> aunque se limpie.
+        </p>
+      </details>
+      <div id="poller-state" class="row small" style="margin-top:8px"></div>
     </div>
     <div id="inbox" class="feed"></div>
   </section>
@@ -114,12 +120,17 @@
   <section id="tab-cards" hidden>
     <div class="panel">
       <h2>Tarjetas procesadas</h2>
-      <p class="small muted" style="margin-top:0">
-        Aquí quedan todas las tarjetas que ya creaste, aunque hayan salido de la
-        bandeja de pendientes. Desde aquí puedes <strong>abrir el editor</strong>,
-        <strong>volver a generar el texto y los colores</strong> con tu
-        suscripción, <strong>enviarlas a Telegram</strong> o descargarlas. Al pulsar «Procesar» primero verás tres pares de textos generados por el CLI de ChatGPT y elegirás uno antes de componer.
-      </p>
+      <details class="help">
+        <summary>Qué puedes hacer con una tarjeta</summary>
+        <p class="small muted" style="margin:8px 0 0">
+          Aquí quedan todas las tarjetas que ya creaste, aunque hayan salido de la
+          bandeja de pendientes. Desde aquí puedes <strong>abrir el editor</strong>,
+          <strong>volver a generar el texto y los colores</strong> con tu
+          suscripción, <strong>enviarlas a Telegram</strong> o descargarlas. Al
+          pulsar «Procesar» primero verás tres pares de textos generados por el
+          CLI de ChatGPT y elegirás uno antes de componer.
+        </p>
+      </details>
       <div class="row">
         <button id="btn-refresh-cards" class="ghost small">Actualizar</button>
         <div class="spacer"></div>

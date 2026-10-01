@@ -190,6 +190,18 @@ async function loadState() {
   fillAccountFilter(state.accounts);
 }
 
+/**
+ * Estado de los proveedores, **agrupado por familia**.
+ *
+ * Antes se dibujaba una píldora por proveedor: diez en total, que en el móvil
+ * ocupaban 1.377 px dentro de una tira deslizable de 351 px. El resultado es
+ * que solo se leía la primera y media («Descubrir: browser», «Descubrir:
+ * nitter», «Descubrir: xa…») y el resto quedaba escondido sin ninguna pista.
+ *
+ * Ahora hay una píldora por familia con el recuento de las que están listas, y
+ * el detalle de cada proveedor sigue disponible en el título emergente y en
+ * «Estado y ajustes». Nada se pierde; deja de ocupar sitio.
+ */
 function renderProviderPills(state) {
   const groups = [
     ["Descubrir", state.timeline_providers],
@@ -198,13 +210,17 @@ function renderProviderPills(state) {
   ];
   const parts = [];
   for (const [label, list] of groups) {
-    for (const provider of list || []) {
-      const cls = provider.available ? "ok" : "off";
-      parts.push(
-        `<span class="pill ${cls}" title="${escapeHtml(provider.detail || "")}">` +
-        `<span class="dot"></span>${escapeHtml(label)}: ${escapeHtml(provider.name)}</span>`
-      );
-    }
+    const providers = list || [];
+    if (!providers.length) continue;
+    const ready = providers.filter((provider) => provider.available).length;
+    const cls = ready === providers.length ? "ok" : ready ? "warn" : "off";
+    const detail = providers
+      .map((provider) => `${provider.available ? "listo" : "no"} · ${provider.name}: ${provider.detail || "sin detalle"}`)
+      .join("\n");
+    parts.push(
+      `<span class="pill ${cls}" title="${escapeHtml(detail)}">` +
+      `<span class="dot"></span>${escapeHtml(label)} ${ready}/${providers.length}</span>`
+    );
   }
   const clock = state.clock;
   if (clock) {
@@ -218,18 +234,47 @@ function renderProviderPills(state) {
           : "El reloj del sistema coincide con la hora de referencia."
       )}">` +
       `<span class="dot"></span>${ICON.reloj} ${escapeHtml(clock.local_offset_human || "UTC")}` +
-      (skewed ? ` · reloj ${escapeHtml(clock.offset_human || "")}` : "") +
+      // `offset_human` ya empieza por «reloj» («reloj del sistema atrasado
+      // 6 h»), así que anteponerlo daba «reloj reloj del sistema…».
+      (skewed ? ` · ${escapeHtml(clock.offset_human || "")}` : "") +
       `</span>`
     );
   }
   $("provider-pills").innerHTML = parts.join("");
 }
 
+/** Nombre legible de cada estado; antes se enseñaba la clave interna. */
+const COUNT_LABELS = {
+  nuevo: "nuevas",
+  seleccionado: "seleccionadas",
+  analizado: "analizadas",
+  procesando: "procesando",
+  tarjeta_lista: "con tarjeta",
+  enviado: "enviadas",
+  descartado: "descartadas",
+  fallido: "fallidas",
+  duplicado: "repetidas",
+};
+
+/**
+ * Contadores de estado, **solo los que tienen valor**.
+ *
+ * Había nueve píldoras y siete marcaban cero («seleccionado: 0», «enviado: 0»…),
+ * así que el dato útil se perdía entre ruido. En el móvil además iban dentro de
+ * un carrusel horizontal con la barra oculta y cada píldora se cortaba a sí
+ * misma («nuev», «selecc», «analiz»), que es como se veía: roto.
+ */
 function renderCounts(counts) {
   if (!counts) return;
-  $("counts").innerHTML = Object.entries(counts)
-    .map(([key, value]) => `<span class="pill">${escapeHtml(key)}: ${value}</span>`)
-    .join("");
+  const box = $("counts");
+  if (!box) return;
+  const partes = Object.entries(counts)
+    .filter(([, value]) => Number(value) > 0)
+    .map(([key, value]) =>
+      `<span class="pill">${escapeHtml(COUNT_LABELS[key] || key)}: ${value}</span>`);
+  box.innerHTML = partes.length
+    ? partes.join("")
+    : `<span class="pill">sin publicaciones</span>`;
 }
 
 function renderEvents(events) {

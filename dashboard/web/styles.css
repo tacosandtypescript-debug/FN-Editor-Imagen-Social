@@ -349,7 +349,16 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-details.help summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+/* Ayuda plegada: el texto largo sigue ahí, pero deja de ocupar la primera
+   pantalla. Siete párrafos sumaban 1.744 caracteres de lectura antes de llegar
+   al contenido. */
+details.help { margin-top: 10px; }
+details.help summary {
+  cursor: pointer; color: var(--muted); font-size: 12px;
+  display: inline-flex; align-items: center; min-height: 28px;
+}
+details.help summary:hover { color: var(--text); }
+details.help[open] summary { color: var(--text); }
 code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
 
 /* ==================================================================
@@ -377,6 +386,8 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   button.small { min-height: 44px; padding: 9px 12px; }
   input, select, textarea { font-size: 16px; padding: 10px 12px; }
   .tweet .actions { gap: 8px; }
+  /* El resumen de la ayuda también se toca con el dedo. */
+  details.help summary { min-height: 44px; }
 }
 
 /* ==================================================================
@@ -404,13 +415,16 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   .brand span { display: none; }
   .spacer { display: none; }
 
-  /* Los indicadores de proveedor pasan a una tira deslizable. */
+  /* Los indicadores van agrupados por familia (tres más el reloj), así que
+     caben envolviendo. Antes eran diez en una tira deslizable de 1.377 px
+     dentro de 351 px: solo se veía la primera y media, y nada indicaba que
+     hubiera más. */
   #provider-pills {
     order: 3; width: 100%;
-    flex-wrap: nowrap; overflow-x: auto;
-    padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+    flex-wrap: wrap;
+    padding-bottom: 0;
   }
-  #provider-pills .pill { flex: 0 0 auto; }
+  #provider-pills .pill { flex: 0 1 auto; }
 
   /* Pestañas deslizables en vez de apiladas. */
   nav.tabs { flex-wrap: nowrap; overflow-x: auto; padding: 10px 12px 0; -webkit-overflow-scrolling: touch; }
@@ -437,15 +451,14 @@ code { background: var(--bg-code); padding: 1px 5px; border-radius: 5px; font-si
   /* Los botones de cada publicación ocupan el ancho y se apilan. */
   .tweet .actions { gap: 8px; }
 
-  /* Las cuentas de estado, en una sola fila deslizable en lugar de tres
-     apiladas: cada fila de más es una publicación que no se ve. */
+  /* Los estados se enseñan solo cuando tienen valor, así que caben de sobra.
+     Antes eran nueve en un carrusel horizontal con la barra **oculta**: cada
+     píldora se cortaba a sí misma («nuev», «selecc», «analiz») y ni se veía ni
+     se podía adivinar que hubiera más a la derecha. */
   #counts {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    padding-bottom: 2px;
+    flex-wrap: wrap;
+    padding-bottom: 0;
   }
-  #counts::-webkit-scrollbar { display: none; }
   .tweet .actions button, .tweet .actions a {
     flex: 1 1 auto; text-align: center;
   }
