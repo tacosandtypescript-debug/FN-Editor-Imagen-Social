@@ -63,14 +63,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _authorised(self, path: str, query: dict) -> bool:
         """Comprueba la clave de acceso cuando el dashboard está en la red.
 
-        Desde el propio equipo siempre se entra. Desde otro dispositivo (el
-        móvil, por ejemplo) hace falta la clave, que viaja una vez en la URL y
-        después queda en una cookie para no tener que repetirla.
+        Se entra sin clave desde el propio equipo y desde el tailnet de
+        Tailscale. Para el resto de la red local hace falta la clave, que viaja
+        una vez en la URL y después queda en una cookie.
         """
         token = getattr(self.server, "access_token", None)
         if not token:
             return True
-        if config.is_loopback(self.client_address[0]):
+
+        origin = self.client_address[0]
+        if config.is_loopback(origin):
+            return True
+        settings = config.Settings()
+        if settings.trust_tailnet and config.is_tailnet(origin):
             return True
 
         supplied = _first(query, "token") or (self.headers.get("X-Dashboard-Token") or "").strip()
@@ -96,14 +101,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         body = (
             "<!DOCTYPE html><html lang='es'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<title>EditImg Dashboard</title>"
             "<body style=\"font-family:system-ui;background:#0f0b18;color:#f2eefb;"
-            "padding:40px;line-height:1.6\">"
-            "<h1>Hace falta la clave de acceso</h1>"
+            "padding:24px;line-height:1.6\">"
+            "<h1 style='font-size:20px'>Hace falta la clave de acceso</h1>"
             "<p>Abre la dirección que imprime el dashboard al arrancar, "
             "incluyendo <code>?token=…</code>. La tienes en la ventana donde "
-            "ejecutaste <code>python -m dashboard</code> o en "
-            "<code>dashboard/.env</code>.</p>"
+            "ejecutaste <code>python -m dashboard</code> y también en "
+            "<code>dashboard/var/dashboard.sqlite3</code> (ajuste "
+            "<code>access_token</code>).</p>"
+            "<p style='color:#a294c9'>Si entras por Tailscale, actualiza el "
+            "dashboard: desde el tailnet ya no se pide clave.</p>"
             "</body></html>"
         ).encode("utf-8")
         try:

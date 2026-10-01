@@ -830,6 +830,70 @@ class AccessControlTests(unittest.TestCase):
         status, _, _ = self.request("/api/state")
         self.assertEqual(status, 200)
 
+    def test_the_tailnet_enters_without_a_token(self):
+        """Por Tailscale no se pide clave: es una red privada ya autenticada.
+
+        Motivo real: el navegador del móvil perdía la cookie y el dashboard
+        quedaba inaccesible desde el tailnet, que era justo la vía cómoda.
+        """
+        self.server.access_token = "clave-secreta"
+        original_tailnet = config.is_tailnet
+        self.addCleanup(setattr, config, "is_tailnet", original_tailnet)
+        config.is_tailnet = lambda address: True
+        status, _, _ = self.request("/api/state")
+        self.assertEqual(status, 200)
+
+    def test_the_tailnet_exemption_can_be_turned_off(self):
+        self.server.access_token = "clave-secreta"
+        original_tailnet = config.is_tailnet
+        self.addCleanup(setattr, config, "is_tailnet", original_tailnet)
+        config.is_tailnet = lambda address: True
+        key = "DASHBOARD_TRUST_TAILNET"
+        before = os.environ.get(key)
+        os.environ[key] = "0"
+        self.addCleanup(
+            lambda: os.environ.pop(key, None) if before is None else os.environ.__setitem__(key, before)
+        )
+        status, _, _ = self.request("/api/state")
+        self.assertEqual(status, 401)
+
+    def test_other_lan_addresses_still_need_the_token(self):
+        """La clave se sigue exigiendo fuera del tailnet."""
+        self.server.access_token = "clave-secreta"
+        original_tailnet = config.is_tailnet
+        self.addCleanup(setattr, config, "is_tailnet", original_tailnet)
+        config.is_tailnet = lambda address: False
+        status, _, _ = self.request("/api/state")
+        self.assertEqual(status, 401)
+        status, _, _ = self.request(
+            "/api/state", {"Cookie": "editimg_token=clave-secreta"}
+        )
+        self.assertEqual(status, 200)
+
+
+class TailnetAddressTests(unittest.TestCase):
+    def test_tailscale_ranges_are_recognised(self):
+        for address in ("100.95.55.79", "100.98.201.10", "100.64.0.1", "100.127.255.254"):
+            with self.subTest(address=address):
+                self.assertTrue(config.is_tailnet(address))
+
+    def test_ipv6_tailnet_is_recognised(self):
+        self.assertTrue(config.is_tailnet("fd7a:115c:a1e0::1"))
+
+    def test_ordinary_addresses_are_not_the_tailnet(self):
+        for address in ("127.0.0.1", "10.0.0.44", "192.168.1.20", "8.8.8.8", "100.63.255.255", "100.128.0.1"):
+            with self.subTest(address=address):
+                self.assertFalse(config.is_tailnet(address))
+
+    def test_junk_is_handled(self):
+        for address in ("", "no-es-una-ip", None):
+            with self.subTest(address=address):
+                self.assertFalse(config.is_tailnet(address))
+
+    def test_loopback_is_not_confused_with_the_tailnet(self):
+        self.assertTrue(config.is_loopback("127.0.0.1"))
+        self.assertFalse(config.is_tailnet("127.0.0.1"))
+
 
 class ListenAddressTests(unittest.TestCase):
     def test_loopback_reports_only_localhost(self):

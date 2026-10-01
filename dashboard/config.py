@@ -119,6 +119,14 @@ class Settings:
     #: se escucha fuera de localhost y no hay clave, se genera una sola vez y
     #: se guarda, para no dejar la herramienta abierta a cualquiera.
     access_token: str = field(default_factory=lambda: _env("DASHBOARD_ACCESS_TOKEN", ""))
+    #: Las peticiones que llegan por el tailnet de Tailscale se aceptan sin
+    #: clave: es una red privada y cifrada a la que solo se unen dispositivos
+    #: ya autenticados, así que pedir un segundo secreto allí solo añade
+    #: fricción (y el navegador del móvil acaba perdiendo la cookie). La clave
+    #: se sigue exigiendo para el resto de la red local.
+    trust_tailnet: bool = field(
+        default_factory=lambda: _env_bool("DASHBOARD_TRUST_TAILNET", True)
+    )
 
     # --- Hora y zona horaria -------------------------------------------
     #: Desfase del usuario respecto a UTC, en horas. Si se deja vacío se
@@ -269,6 +277,35 @@ def is_loopback(address: str) -> bool:
     # Direcciones IPv4 mapeadas en IPv6 (::ffff:127.0.0.1).
     mapped = getattr(parsed, "ipv4_mapped", None)
     return bool(mapped and mapped.is_loopback)
+
+
+#: Rangos que usa Tailscale. Solo entran dispositivos del propio tailnet, que
+#: ya han tenido que autenticarse para unirse.
+TAILNET_V4 = "100.64.0.0/10"
+TAILNET_V6 = "fd7a:115c:a1e0::/48"
+
+
+def is_tailnet(address: str) -> bool:
+    """True si la petición llega por la red privada de Tailscale."""
+    import ipaddress
+
+    raw = str(address or "").split("%")[0].strip()
+    if not raw:
+        return False
+    try:
+        parsed = ipaddress.ip_address(raw)
+    except ValueError:
+        return False
+    mapped = getattr(parsed, "ipv4_mapped", None)
+    if mapped is not None:
+        parsed = mapped
+    for network in (TAILNET_V4, TAILNET_V6):
+        try:
+            if parsed in ipaddress.ip_network(network):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def listen_addresses(host: str, port: int) -> list[str]:
