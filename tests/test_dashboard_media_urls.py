@@ -142,6 +142,56 @@ class SelectiveEnrichmentTests(unittest.TestCase):
         # El que ya venía completo no se consulta.
         self.assertNotIn("completo", self.enriched)
 
+    def test_the_limit_is_applied_after_filtering_not_before(self):
+        """Regresión: el tope se aplicaba antes de filtrar y perdía publicaciones.
+
+        Con 25 completas delante, las que necesitaban enriquecido caían más
+        allá del puesto 25 y se quedaban sin fecha para siempre.
+        """
+        from dashboard.service import ENRICH_LIMIT
+
+        tweets = [
+            self._tweet(f"ok{i}", "2026-10-01T07:00:00+00:00", ["https://x/a.jpg"])
+            for i in range(ENRICH_LIMIT)
+        ]
+        tweets += [
+            self._tweet(f"falta{i}", None, ["https://x/b.jpg"]) for i in range(5)
+        ]
+        self.service._record_success("cuenta", tweets, "nitter")
+
+        self.assertEqual(
+            sorted(self.enriched),
+            [f"falta{i}" for i in range(5)],
+            "las que faltan de fecha deben intentarse aunque vengan al final",
+        )
+
+    def test_the_per_account_limit_still_applies(self):
+        from dashboard.service import ENRICH_LIMIT
+
+        tweets = [self._tweet(f"falta{i}", None, ["https://x/b.jpg"]) for i in range(ENRICH_LIMIT + 10)]
+        self.service._record_success("cuenta", tweets, "nitter")
+        self.assertEqual(len(self.enriched), ENRICH_LIMIT)
+
+    def test_a_global_budget_caps_the_whole_poll(self):
+        """Sin presupuesto global, 24 cuentas por 25 darían 600 peticiones."""
+        budget = {"remaining": 3, "skipped": 0}
+        for cuenta in range(4):
+            tweets = [
+                self._tweet(f"{cuenta}-{i}", None, ["https://x/b.jpg"]) for i in range(5)
+            ]
+            self.service._record_success("c", tweets, "nitter", None, budget)
+
+        self.assertEqual(len(self.enriched), 3, "el presupuesto debe cortar en seco")
+        self.assertEqual(budget["remaining"], 0)
+        # Y queda constancia de cuántas se aplazaron, en vez de perderse calladas.
+        self.assertEqual(budget["skipped"], 17)
+
+    def test_without_a_budget_nothing_is_capped_globally(self):
+        for cuenta in range(3):
+            tweets = [self._tweet(f"{cuenta}-{i}", None, []) for i in range(4)]
+            self.service._record_success("c", tweets, "nitter")
+        self.assertEqual(len(self.enriched), 12)
+
     def test_a_fully_provided_batch_costs_no_extra_requests(self):
         tweets = [
             self._tweet(f"t{i}", "2026-10-01T07:00:00+00:00", ["https://x/a.jpg"])

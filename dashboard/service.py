@@ -21,9 +21,13 @@ from .providers import telegram as telegram_providers
 from .providers import timelines as timeline_providers
 from .store import Store
 
-#: Máximo de publicaciones nuevas que se enriquecen por sondeo, para no
-#: encadenar demasiadas peticiones a los mirrors públicos.
+#: Máximo de publicaciones que se enriquecen **por cuenta** en un sondeo.
 ENRICH_LIMIT = 25
+
+#: Máximo de consultas de enriquecido en un sondeo completo, sumando todas las
+#: cuentas. Sin este tope, 24 cuentas por 25 darían hasta 600 peticiones
+#: seguidas a los mirrors públicos, que responden 429.
+ENRICH_BUDGET = 60
 
 #: Por debajo de esto, el navegador está devolviendo la vista previa de X y no
 #: el perfil completo, casi siempre por falta de sesión iniciada.
@@ -200,6 +204,11 @@ class DashboardService:
         provider_name = batch["provider"]
         results: list[dict] = []
         total_new = 0
+        # Presupuesto compartido por todo el sondeo: sin él, cada cuenta podría
+        # pedir hasta 25 enriquecidos y 24 cuentas dispararían 600 peticiones
+        # seguidas a los mirrors públicos.
+        settings = config.Settings()
+        budget = {"remaining": max(0, int(settings.enrich_budget)), "skipped": 0}
         for position, account in enumerate(accounts, 1):
             name = account["handle"]
             if progress is not None:
@@ -209,9 +218,20 @@ class DashboardService:
             if isinstance(outcome, Exception):
                 one = self._record_failure(name, str(outcome))
             else:
-                one = self._record_success(name, outcome, provider_name, batch.get("attempts"))
+                one = self._record_success(
+                    name, outcome, provider_name, batch.get("attempts"), budget
+                )
             total_new += one["new"]
             results.append(one)
+
+        if budget["skipped"]:
+            self.store.log(
+                f"Se dejaron {budget['skipped']} publicación(es) sin consultar a los "
+                f"mirrors por el límite de {settings.enrich_budget} por sondeo; se "
+                "completarán en el siguiente. Sube DASHBOARD_ENRICH_BUDGET para "
+                "hacerlo todo de una vez.",
+                level="warn",
+            )
 
         if progress is not None:
             progress.update({"current": None, "running": False, "provider": provider_name})
@@ -234,22 +254,32 @@ class DashboardService:
         tweets: list[dict],
         provider_name: str | None,
         attempts: list[dict] | None = None,
+        budget: dict | None = None,
     ) -> dict:
         latest = max((tweet["tweet_id"] for tweet in tweets), default=None)
         # Se enriquecen solo las que nunca se han visto: el registro permanente
         # evita repetir consultas a los mirrors tras una limpieza.
         unseen = set(self.store.filter_unseen(tweet["tweet_id"] for tweet in tweets))
-        fresh = [tweet for tweet in tweets if tweet["tweet_id"] in unseen][:ENRICH_LIMIT]
         # Y solo las que no traen ya la fecha y los medios. Nitter entrega las
         # dos cosas en su RSS, así que preguntar otra vez por ellas era gastar
         # una petición por publicación (0,34 s) y arriesgarse al 429.
-        self._enrich(
-            [
-                tweet
-                for tweet in fresh
-                if not (tweet.get("posted_at") and tweet.get("media"))
-            ]
-        )
+        #
+        # El filtro va ANTES del tope: al revés, las que necesitan enriquecido
+        # y caían más allá del puesto 25 se quedaban sin fecha para siempre.
+        pending = [
+            tweet
+            for tweet in tweets
+            if tweet["tweet_id"] in unseen
+            and not (tweet.get("posted_at") and tweet.get("media"))
+        ]
+        allowed = min(ENRICH_LIMIT, len(pending))
+        if budget is not None:
+            allowed = min(allowed, max(0, int(budget.get("remaining", 0))))
+        selected = pending[:allowed]
+        if budget is not None:
+            budget["remaining"] = max(0, int(budget.get("remaining", 0)) - len(selected))
+            budget["skipped"] = int(budget.get("skipped", 0)) + (len(pending) - len(selected))
+        self._enrich(selected)
 
         settings = config.Settings()
         result = self.store.upsert_tweets(

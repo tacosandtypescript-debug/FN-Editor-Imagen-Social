@@ -156,6 +156,11 @@ class Settings:
     duplicate_window_days: int = field(
         default_factory=lambda: _env_int("DASHBOARD_DUPLICATE_WINDOW_DAYS", 7)
     )
+    #: Consultas de enriquecido por sondeo, sumando todas las cuentas. Cada
+    #: una cuesta ~0,34 s y los mirrors limitan las peticiones.
+    enrich_budget: int = field(
+        default_factory=lambda: _env_int("DASHBOARD_ENRICH_BUDGET", 60)
+    )
     nitter_instances: tuple[str, ...] = field(
         default_factory=lambda: _env_list("DASHBOARD_NITTER_INSTANCES", DEFAULT_NITTER_INSTANCES)
     )
@@ -321,6 +326,7 @@ def redacted(settings: Settings) -> dict:
         "poll_on_start": settings.poll_on_start,
         "retention_hours": settings.retention_hours,
         "duplicate_window_days": settings.duplicate_window_days,
+        "enrich_budget": settings.enrich_budget,
         "nitter_instances": list(settings.nitter_instances),
         "nitter_discovery": settings.nitter_discovery,
         "nitter_min_points": settings.nitter_min_points,
