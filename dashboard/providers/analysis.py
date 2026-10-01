@@ -60,6 +60,12 @@ Reglas obligatorias:
   caracteres contando espacios (unas 8 palabras). Son límites duros: el
   compositor rechaza el texto que no entra y la composición falla. No rellenes
   la plantilla con una etiqueta fija ni con una fecha inventada.
+- "bottom" APORTA algo que no diga ya "top": el dato que falta, la fecha, la
+  consecuencia o la cifra. Nunca repitas la idea ni las palabras del titular.
+  Mal: top «EL CALZADO DE FREDDY FAZBEAR» con bottom «LAS ZAPATILLAS DE FREDDY
+  FAZBEAR» — dice lo mismo dos veces con un sinónimo.
+  Bien: top «FORTNITEMARES VUELVE CON {MAPA|FF7A00} NUEVO» con bottom
+  «SE ESTRENA EL {01/10|8B3DFF}».
 - COLOREA SIEMPRE LAS PALABRAS: resalta exactamente UNA palabra en "top" y UNA
   palabra en "bottom". No es opcional.
 - Para resaltar una palabra, escríbela así: {PALABRA|HEX}
@@ -110,6 +116,13 @@ Reglas obligatorias:
   contando espacios (unas 8 palabras). Son límites duros: si te pasas, la
   composición falla y la opción se descarta. No uses etiquetas fijas de
   plantilla ni fechas inventadas.
+- En cada opción, "bottom" APORTA algo que no diga ya su "top": el dato que
+  falta, la fecha, la consecuencia o la cifra. Nunca repitas la idea ni las
+  palabras del titular.
+  Mal: top «EL CALZADO DE FREDDY FAZBEAR» con bottom «LAS ZAPATILLAS DE FREDDY
+  FAZBEAR» — lo mismo dos veces con un sinónimo.
+  Bien: top «FORTNITEMARES VUELVE CON {MAPA|FF7A00} NUEVO» con bottom
+  «SE ESTRENA EL {01/10|8B3DFF}».
 - Las tres opciones deben cambiar el enfoque o las palabras, sin inventar datos,
   cifras ni nombres que no estén en la publicación.
 - COLOREA exactamente UNA palabra informativa en "top" y UNA en "bottom" de
@@ -530,8 +543,40 @@ def sanitize_analysis(analysis: Analysis) -> Analysis:
 
         return seg.sub(replace, value).strip()
 
-    top = clean(analysis.top)
-    bottom = clean(analysis.bottom)
+    def ensure_highlight(text: str) -> str:
+        """Colorea una palabra si el texto no trae ninguna.
+
+        La regla del repositorio dice que colorear **no es opcional**, pero el
+        proveedor `manual` devuelve texto plano y un modelo puede saltarse la
+        instrucción. Antes eso llegaba hasta la tarjeta: la número 1 se compuso
+        sin un solo color, con un titular en blanco y negro.
+
+        Se elige la palabra más larga que no sea funcional, que es la que más
+        información aporta, y se respeta el tope de dos colores de acento.
+        """
+        if "{" in text or not text.strip() or len(used_colors) >= 2:
+            return text
+        candidatas = [
+            match
+            for match in re.finditer(r"[^\W\d_]+", text, re.UNICODE)
+            if match.group(0).casefold() not in function_words and len(match.group(0)) >= 4
+        ]
+        if not candidatas:
+            return text
+        elegida = max(candidatas, key=lambda match: len(match.group(0)))
+        color = next(
+            (c for c in sorted(palette) if c not in used_colors),
+            sorted(palette)[0],
+        )
+        used_colors.append(color)
+        return (
+            text[: elegida.start()]
+            + "{" + elegida.group(0) + "|" + color.lstrip("#") + "}"
+            + text[elegida.end() :]
+        )
+
+    top = ensure_highlight(clean(analysis.top))
+    bottom = ensure_highlight(clean(analysis.bottom))
     hashtags = normalise_hashtags(analysis.hashtags, analysis.caption)
     caption = (analysis.caption or "").strip() or f"{top} · {bottom}"
     # Los hashtags viven en el caption, nunca dentro de la imagen. El borrado
@@ -557,6 +602,36 @@ def sanitize_analysis(analysis: Analysis) -> Analysis:
         provider=analysis.provider,
         raw=analysis.raw,
     )
+
+
+def informative_words(text: str) -> set[str]:
+    """Palabras con carga semántica de un texto, sin el marcado de color."""
+    composer = repo.compose_image()
+    limpio = composer.SEG.sub(lambda match: match.group(1), str(text or ""))
+    return {
+        palabra.casefold()
+        for palabra in composer.HIGHLIGHT_WORD_RE.findall(limpio)
+        if palabra.casefold() not in composer.SPANISH_FUNCTION_WORDS and len(palabra) >= 4
+    }
+
+
+def is_redundant_pair(top: str, bottom: str) -> bool:
+    """True si el texto de abajo no dice nada que no dijera ya el titular.
+
+    Detecta el eco literal: todas las palabras con carga del texto de abajo
+    están ya en el titular. Se comprobó en real que la tarjeta 1 salió con
+    «EL CALZADO DE FREDDY FAZBEAR» arriba y «LAS ZAPATILLAS DE FREDDY FAZBEAR»
+    abajo — la misma idea dos veces.
+
+    Los sinónimos no se pueden detectar aquí (`calzado` y `zapatillas` no
+    comparten letras); de eso se encarga la regla del prompt. Esto solo evita
+    que se muestre una opción que repite el titular palabra por palabra.
+    """
+    arriba = informative_words(top)
+    abajo = informative_words(bottom)
+    if len(abajo) < 2 or not arriba:
+        return False
+    return abajo <= arriba
 
 
 def normalise_hashtags(hashtags, caption: str = "") -> list[str]:

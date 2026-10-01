@@ -722,6 +722,12 @@ class DashboardService:
                 if not cabe:
                     descartadas.append(f"{opcion['bottom'][:48]}… ({motivo})")
                     continue
+                # El texto de abajo debe aportar, no repetir el titular.
+                if analysis_providers.is_redundant_pair(opcion["top"], opcion["bottom"]):
+                    descartadas.append(
+                        f"{opcion['bottom'][:48]}… (repite el titular)"
+                    )
+                    continue
                 opciones.append(opcion)
 
             if len(opciones) >= 3:
@@ -732,9 +738,11 @@ class DashboardService:
                 {"top": o["top"], "bottom": o["bottom"]} for o in opciones
             ] + list(previous_options or [])
             prompt_tweet["instructions"] = (
-                "El texto de abajo no cabía en la tarjeta. Genera tres pares "
-                "nuevos y claros, con MÁXIMO 52 caracteres en \"bottom\" y 48 en "
-                "\"top\" contando espacios."
+                "Las opciones anteriores no servían: o el texto de abajo no cabía "
+                "en la tarjeta, o repetía lo mismo que el titular. Genera tres "
+                "pares nuevos y distintos, con MÁXIMO 52 caracteres en \"bottom\" "
+                "y 48 en \"top\", y con un texto de abajo que APORTE información "
+                "que no esté ya en el titular."
             )
 
         if descartadas:

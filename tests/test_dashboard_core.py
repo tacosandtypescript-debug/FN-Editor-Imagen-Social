@@ -215,6 +215,37 @@ class SanitizerTests(unittest.TestCase):
         }
         self.assertLessEqual(len(colors), 2)
 
+    def test_plain_text_gets_a_highlight_so_no_card_ships_without_colour(self):
+        """La tarjeta 1 salió sin un solo color, con la regla en contra.
+
+        El proveedor `manual` devuelve texto plano y el contrato del repositorio
+        dice que colorear **no es opcional**. Ahora se colorea la palabra más
+        informativa en lugar de dejar la tarjeta en blanco y negro.
+        """
+        result = self._sanitize("FREDDY FAZBEAR SLIPPERS", "CONTEXTO PENDIENTE")
+        seg = analysis_providers.repo.compose_image().SEG
+        self.assertTrue(seg.search(result.top), result.top)
+        self.assertTrue(seg.search(result.bottom), result.bottom)
+        # Y sigue siendo válido para el compositor.
+        analysis_providers.repo.compose_image().validate_text_markup(result.top, result.bottom)
+
+    def test_the_added_highlight_is_an_informative_word(self):
+        result = self._sanitize("LA NUEVA TIENDA DE FORTNITE", "EL CONTEXTO")
+        # «FORTNITE» es la más larga; «LA» es funcional y no puede colorearse.
+        self.assertIn("{FORTNITE|", result.top)
+        self.assertNotIn("{LA|", result.top)
+
+    def test_text_that_already_has_colour_is_left_alone(self):
+        result = self._sanitize("PICO SIN {PISTA|8B3DFF}", "SIN {FUENTE|FF7A00} CONOCIDA")
+        self.assertEqual(result.top, "PICO SIN {PISTA|8B3DFF}")
+        self.assertEqual(result.bottom, "SIN {FUENTE|FF7A00} CONOCIDA")
+
+    def test_nothing_is_invented_when_there_is_no_word_to_colour(self):
+        """Con solo palabras funcionales no se colorea nada: no se inventa."""
+        result = self._sanitize("DE LA EN EL", "CON POR PARA")
+        self.assertNotIn("{", result.top)
+        self.assertNotIn("{", result.bottom)
+
     def test_colors_are_snapped_to_the_preset_palette(self):
         palette = {color.upper() for color in analysis_providers.palette_colors()}
         result = self._sanitize("{TIENDA|010203}", "CONTEXTO")
@@ -257,8 +288,11 @@ class SanitizerTests(unittest.TestCase):
             "```\nEspero que sirva."
         )
         result = analysis_providers.analysis_from_payload(payload, provider="test")
-        self.assertEqual(result.top, "TITULAR")
-        self.assertEqual(result.bottom, "CONTEXTO")
+        # Lo que se comprueba aquí es que el JSON se extrae del ruido. El texto
+        # puede llevar ya el marcado de color, porque la regla dice que colorear
+        # no es opcional y estas palabras llegan sin él.
+        self.assertIn("TITULAR", result.top)
+        self.assertIn("CONTEXTO", result.bottom)
 
     def test_missing_fields_raise_provider_error(self):
         with self.assertRaises(analysis_providers.ProviderError):
@@ -316,6 +350,43 @@ class PromptTests(unittest.TestCase):
                 plano = re.sub(r"\s+", " ", prompt).lower()
                 self.assertIn("48 caracteres", plano)
                 self.assertIn("52 caracteres", plano)
+
+    def test_prompts_forbid_the_bottom_from_repeating_the_title(self):
+        """El texto de abajo debe aportar, no repetir la idea del titular.
+
+        Ocurrió en real: «EL CALZADO DE FREDDY FAZBEAR» arriba y «LAS ZAPATILLAS
+        DE FREDDY FAZBEAR» abajo, con el mismo significado dos veces.
+        """
+        for prompt in (
+            analysis_providers.build_proposal_system_prompt(),
+            analysis_providers.build_system_prompt(),
+        ):
+            with self.subTest(primeras=prompt[:40]):
+                plano = re.sub(r"\s+", " ", prompt).lower()
+                self.assertIn("aporta", plano)
+                self.assertIn("nunca repitas la idea", plano)
+                # Y el ejemplo real, que es lo que mejor guía al modelo.
+                self.assertIn("zapatillas", plano)
+
+    def test_exact_echo_between_title_and_bottom_is_detected(self):
+        """El eco literal se detecta; los sinónimos no, y no se finge.
+
+        «calzado» y «zapatillas» significan lo mismo pero no comparten letras:
+        eso lo tiene que resolver el prompt, no una comparación de palabras.
+        """
+        self.assertTrue(
+            analysis_providers.is_redundant_pair("FORTNITEMARES MAPA NUEVO", "MAPA NUEVO")
+        )
+        self.assertFalse(
+            analysis_providers.is_redundant_pair(
+                "FORTNITEMARES VUELVE CON {MAPA|FF7A00} NUEVO", "SE ESTRENA EL 01/10"
+            )
+        )
+        self.assertFalse(
+            analysis_providers.is_redundant_pair(
+                "EL CALZADO DE FREDDY FAZBEAR", "LAS ZAPATILLAS DE FREDDY FAZBEAR"
+            )
+        )
 
     def test_the_composer_confirms_which_texts_fit(self):
         """`text_fits` reutiliza `fit_block`, así que no puede divergir."""

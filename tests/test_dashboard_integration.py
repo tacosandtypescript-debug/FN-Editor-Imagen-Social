@@ -350,7 +350,9 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertEqual(len(llamadas), 2)
         self.assertEqual(result["discarded"], 3)
         self.assertEqual(len(result["options"]), 3)
-        self.assertEqual(result["options"][0]["top"], "CORTA A")
+        # El texto puede llevar ya el marcado de color: la regla dice que
+        # colorear no es opcional y estos pares de prueba llegan en plano.
+        self.assertIn("CORTA", result["options"][0]["top"])
         # Y la segunda petición llevaba la instrucción de acortar.
         self.assertIn("no cabía", llamadas[1]["instructions"])
 
@@ -365,7 +367,7 @@ class DashboardIntegrationTests(unittest.TestCase):
         )
         result = self.service.propose_tweet(self.tweet_id, provider="codex")
         self.assertEqual(len(result["options"]), 1)
-        self.assertEqual(result["options"][0]["top"], "CABE A")
+        self.assertIn("CABE", result["options"][0]["top"])
         # Se intentó una segunda vez para completar el trío, sin conseguirlo.
         self.assertEqual(len(llamadas), 2)
 
