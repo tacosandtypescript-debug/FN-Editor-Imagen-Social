@@ -12,9 +12,12 @@ const app = {
   listRequest: 0,
   pollWatch: null,
   confirmResolve: null,
+  mediaFilter: "all",
+  mediaCounts: {},
 };
 
 const TABS = ["inbox", "accounts", "system"];
+const MEDIA_FILTERS = ["all", "images", "videos"];
 
 async function api(path, options = {}) {
   const request = { ...options, headers: { ...(options.headers || {}) } };
@@ -200,6 +203,56 @@ function renderCounts(counts) {
       `${index ? '<span class="separator">·</span>' : ""}<span>${escapeHtml(part)}</span>`
     ).join("");
   }
+}
+
+function mediaFilterLabel(value) {
+  return ({ all: "Todas", images: "Imágenes", videos: "Vídeos" })[value] || "Todas";
+}
+
+function renderMediaTabs(mediaCounts = app.mediaCounts) {
+  app.mediaCounts = mediaCounts || {};
+  for (const button of document.querySelectorAll("#media-tabs [data-media-filter]")) {
+    const active = button.dataset.mediaFilter === app.mediaFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+    const count = button.querySelector(".media-tab-count");
+    if (count) count.textContent = Number.isFinite(Number(app.mediaCounts[button.dataset.mediaFilter]))
+      ? String(app.mediaCounts[button.dataset.mediaFilter])
+      : "—";
+  }
+  const panel = $("inbox");
+  const activeTab = $(`media-tab-${app.mediaFilter}`);
+  if (panel && activeTab) panel.setAttribute("aria-labelledby", activeTab.id);
+  const note = $("media-filter-note");
+  if (note) {
+    const notes = {
+      all: "Todas las publicaciones detectadas.",
+      images: "Solo publicaciones con imágenes, sin vídeo.",
+      videos: "Publicaciones que contienen vídeo, tengan o no miniatura.",
+    };
+    note.textContent = notes[app.mediaFilter] || notes.all;
+  }
+}
+
+function normaliseMediaFilter(value) {
+  const candidate = String(value || "").toLowerCase();
+  return MEDIA_FILTERS.includes(candidate) ? candidate : "all";
+}
+
+async function setMediaFilter(value) {
+  const next = normaliseMediaFilter(value);
+  if (next === app.mediaFilter) {
+    renderMediaTabs();
+    return;
+  }
+  app.mediaFilter = next;
+  renderMediaTabs();
+  await refreshList();
+}
+
+function activateMediaFilter(value) {
+  setMediaFilter(value).catch((error) => toast(error.message, "error"));
 }
 
 function renderMonitor(state) {
@@ -408,6 +461,11 @@ function tweetCard(tweet) {
   const media = list.slice(0, 6).map((url) =>
     `<a href="${escapeHtml(tweet.url || "#")}" target="_blank" rel="noopener" class="shot"><img src="${escapeHtml(url)}" alt="Miniatura de @${escapeHtml(tweet.author_handle || tweet.source_handle)}" loading="lazy" referrerpolicy="no-referrer">${tweet.has_video ? '<span class="video-flag">vídeo</span>' : ""}</a>`
   ).join("");
+  const mediaKind = tweet.has_video ? "video" : tweet.has_media ? "image" : "text";
+  const mediaLabel = tweet.has_video ? "Vídeo" : tweet.has_media ? "Imagen" : "Texto";
+  const mediaPreview = media || (tweet.has_video
+    ? `<div class="tweet-media-note video"><strong>Vídeo detectado</strong><span>La miniatura no está disponible; ábrelo en X para reproducirlo.</span></div>`
+    : "");
   const ready = tweet.status === "listo";
   const duplicate = Boolean(tweet.is_duplicate);
   const statusClass = ready ? "ready" : duplicate ? "duplicate" : "";
@@ -417,12 +475,12 @@ function tweetCard(tweet) {
   const url = escapeHtml(tweet.url || "");
   const telegramDisabled = !app.telegramReady || !tweet.url;
   const telegramReason = !app.telegramReady ? "Telegram se conectará en la Fase 2." : "Esta publicación no tiene enlace.";
-  return `<article class="${classes}" data-tweet-id="${id}">
+  return `<article class="${classes}" data-tweet-id="${id}" data-media-kind="${mediaKind}">
     <div class="tweet-main">
-      <div class="tweet-meta"><span class="tweet-status ${statusClass}">${statusLabel}</span><span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>${tweet.author_handle && tweet.author_handle !== tweet.source_handle ? `<span class="via">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}${ready ? '<span class="done-flag">· protegida</span>' : ""}</div>
+      <div class="tweet-meta"><span class="tweet-status ${statusClass}">${statusLabel}</span><span class="media-kind ${mediaKind}">${mediaLabel}</span><span class="account">@${escapeHtml(tweet.author_handle || tweet.source_handle)}</span>${tweet.author_handle && tweet.author_handle !== tweet.source_handle ? `<span class="via">vía @${escapeHtml(tweet.source_handle)}</span>` : ""}${ready ? '<span class="done-flag">· protegida</span>' : ""}</div>
       <div class="tweet-when"><strong data-posted="${escapeHtml(tweet.posted_at || tweet.fetched_at || "")}">${escapeHtml(tweet.posted_relative || "sin fecha")}</strong><span>· ${escapeHtml(tweet.posted_absolute || "")}</span></div>
       <div class="tweet-text">${escapeHtml(tweet.text || "(sin texto)")}</div>
-      ${media ? `<div class="tweet-media">${media}</div>` : ""}
+      ${mediaPreview ? (media ? `<div class="tweet-media">${media}</div>` : mediaPreview) : ""}
     </div>
     <div class="tweet-actions">
       ${tweet.url ? `<a class="button small primary" href="${url}" target="_blank" rel="noopener">Abrir en X</a>` : `<span class="button small secondary" aria-disabled="true">Sin enlace</span>`}
@@ -454,7 +512,8 @@ function renderInbox(tweets) {
   box.setAttribute("aria-busy", "false");
   if (!tweets.length) {
     const hasAccounts = (app.state && app.state.accounts || []).length > 0;
-    box.innerHTML = `<div class="empty-state"><h3>${hasAccounts ? "No hay publicaciones nuevas" : "El radar está vacío"}</h3><p>${hasAccounts ? "No hay señales pendientes con este filtro. Puedes lanzar una revisión manual o volver más tarde." : "Añade una cuenta en Cuentas y pulsa “Buscar ahora” para empezar."}</p></div>`;
+    const scope = app.mediaFilter === "all" ? "publicaciones" : mediaFilterLabel(app.mediaFilter).toLowerCase();
+    box.innerHTML = `<div class="empty-state"><h3>${hasAccounts ? `No hay ${scope}` : "El radar está vacío"}</h3><p>${hasAccounts ? "No hay señales con este filtro. Puedes lanzar una revisión manual o volver más tarde." : "Añade una cuenta en Cuentas y pulsa “Buscar ahora” para empezar."}</p></div>`;
     return;
   }
   const ordered = [...tweets].sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
@@ -494,6 +553,7 @@ async function loadTweets({ append = false } = {}) {
   const limit = Number($("filter-limit").value) || 48;
   const offset = append ? app.offset : 0;
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  query.set("media", app.mediaFilter);
   if (view === "listas") { query.set("status", "listo"); query.set("pending", "0"); }
   else if (view === "todas") query.set("pending", "0");
   else query.set("pending", "1");
@@ -507,6 +567,7 @@ async function loadTweets({ append = false } = {}) {
     app.offset = Number(payload.next_offset ?? app.tweets.length);
     app.hasMore = Boolean(payload.has_more);
     renderCounts(payload.counts || app.counts);
+    renderMediaTabs(payload.media_counts || app.mediaCounts);
     renderInbox(app.tweets);
     renderPagination();
   } catch (error) {
@@ -678,6 +739,28 @@ document.addEventListener("change", (event) => {
   }
 });
 
+document.addEventListener("keydown", (event) => {
+  const current = event.target.closest("#media-tabs [role=tab]");
+  if (!current) return;
+  const tabs = [...document.querySelectorAll("#media-tabs [role=tab]")];
+  const index = tabs.indexOf(current);
+  if (index < 0) return;
+  let next = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") next = tabs[(index + 1) % tabs.length];
+  if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = tabs[(index - 1 + tabs.length) % tabs.length];
+  if (event.key === "Home") next = tabs[0];
+  if (event.key === "End") next = tabs[tabs.length - 1];
+  if (next) {
+    event.preventDefault();
+    next.focus();
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    activateMediaFilter(current.dataset.mediaFilter);
+  }
+});
+
 $("form-account").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("account-handle");
@@ -708,6 +791,7 @@ $("confirm-dialog").addEventListener("cancel", () => {
 });
 
 switchTab(tabFromHash(), false);
+renderMediaTabs();
 renderLoading();
 loadState()
   .then(() => loadTweets())

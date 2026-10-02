@@ -18,6 +18,7 @@ import threading
 from urllib.error import HTTPError, URLError
 
 from . import config
+from . import urls
 
 _LOCK = threading.Lock()
 _CACHE: dict[str, object] = {}
@@ -27,6 +28,29 @@ _DATE_KEYS = ("created_at", "date", "createdAt", "tweet_created_at", "published_
 
 #: Mirrors que devuelven el JSON del post sin necesidad de credenciales.
 API_HOSTS = ("api.vxtwitter.com", "api.fxtwitter.com")
+VIDEO_TYPES = {"video", "animated_gif", "gif"}
+
+
+def _payload_has_video(payload) -> bool:
+    """Busca vídeo también cuando el mirror no entrega una miniatura.
+
+    Vx/FxTwitter usan varias formas de respuesta. Se revisan tanto los tipos
+    explícitos como las URL directas/portadas, pero no el texto visible del
+    post: la palabra «video» en una publicación no debe clasificarla así.
+    """
+    if isinstance(payload, dict):
+        media_type = str(payload.get("type") or payload.get("media_type") or "").lower()
+        if media_type in VIDEO_TYPES:
+            return True
+        for value in payload.values():
+            if _payload_has_video(value):
+                return True
+        return False
+    if isinstance(payload, list):
+        return any(_payload_has_video(value) for value in payload)
+    if isinstance(payload, str):
+        return urls.is_video_url(payload)
+    return False
 
 
 def fetch_media():
@@ -93,11 +117,13 @@ def probe_post(url: str) -> dict:
         media_urls = module.extract_media_urls(payload)
         post_text = module.extract_post_text(payload)
         posted_at = _find_date(payload)
+        has_video = _payload_has_video(payload)
         if media_urls:
             data = {
                 "media_urls": media_urls,
                 "post_text": post_text,
                 "posted_at": posted_at,
+                "has_video": has_video,
                 "api_host": api_host,
             }
             if post_text or posted_at:
@@ -110,9 +136,10 @@ def probe_post(url: str) -> dict:
                 "media_urls": [],
                 "post_text": post_text,
                 "posted_at": posted_at,
+                "has_video": has_video,
                 "api_host": api_host,
             }
-        errors.append(f"{api_host}: respuesta sin texto ni imágenes")
+        errors.append(f"{api_host}: respuesta sin texto ni medios")
 
     if media_without_text:
         return media_without_text

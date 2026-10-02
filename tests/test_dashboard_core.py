@@ -142,6 +142,19 @@ class StoreTests(unittest.TestCase):
         self.store.upsert_tweets([{"tweet_id": "556", "source_handle": "c"}])
         self.assertFalse(self.store.get_tweet("556")["has_media"])
 
+    def test_media_filters_separate_images_videos_and_text(self):
+        self.store.upsert_tweets(
+            [
+                {"tweet_id": "img", "source_handle": "c", "media": ["https://pbs.twimg.com/media/a.jpg"]},
+                {"tweet_id": "vid", "source_handle": "c", "has_video": True},
+                {"tweet_id": "txt", "source_handle": "c", "text": "solo texto"},
+            ]
+        )
+        self.assertEqual([tweet["tweet_id"] for tweet in self.store.list_tweets(media_kind="images")], ["img"])
+        self.assertEqual([tweet["tweet_id"] for tweet in self.store.list_tweets(media_kind="videos")], ["vid"])
+        self.assertEqual(self.store.count_by_media(), {"all": 3, "images": 1, "videos": 1})
+        self.assertTrue(self.store.get_tweet("vid")["has_media"])
+
 
 class NitterParsingTests(unittest.TestCase):
     def test_parses_items_with_text_media_and_date(self):
@@ -175,6 +188,18 @@ class NitterParsingTests(unittest.TestCase):
         rss = RSS_FIXTURE.replace("<title>TITULAR CORTO</title>", "<title>CORTO</title>")
         record = timeline_providers.parse_nitter_rss(rss, source_handle="c")[0]
         self.assertIn("FORTNITEMARES VUELVE", record.text)
+
+    def test_video_markup_is_kept_even_without_an_image_tag(self):
+        rss = """<?xml version="1.0"?>
+        <rss><channel><item>
+          <title>Vídeo</title>
+          <description><![CDATA[<p>FORTNITEMARES VUELVE</p><video poster="https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/a.jpg"></video>]]></description>
+          <guid>2105562614461776336</guid>
+          <link>https://nitter.example/cuenta/status/2105562614461776336</link>
+        </item></channel></rss>"""
+        record = timeline_providers.parse_nitter_rss(rss, source_handle="c")[0]
+        self.assertTrue(record.has_video)
+        self.assertIn("ext_tw_video_thumb", record.media[0])
 
 
 class SeenRegistryTests(unittest.TestCase):

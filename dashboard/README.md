@@ -45,7 +45,7 @@ El núcleo funciona **solo con la biblioteca estándar y Pillow**, así que
 
 | Pieza | Origen | Cómo se usa |
 |---|---|---|
-| Lectura del post | `bin/fetch_media.py` | Se carga por ruta, sin modificarlo: da texto, medios y fecha |
+| Lectura del post | `bin/fetch_media.py` + `dashboard/posts.py` | Se carga por ruta, sin modificarlo: da texto, medios, fecha y señal de vídeo |
 | Miniaturas | CDN de X | Se pide la variante de 360 px en lugar del original |
 
 **No se ha modificado** ningún archivo de `bin/`, los presets, las fuentes, las
@@ -224,6 +224,11 @@ El filtro **Ver** cambia entre *Pendientes*, *Marcadas como listas* y *Todas*.
 Al marcar una publicación como lista desaparece de *Pendientes* y pasa a
 *Marcadas como listas*, que es donde se puede desmarcar.
 
+Debajo está el filtro de tipo: **Todas**, **Imágenes** y **Vídeos**. Es un filtro
+real del servidor, no solo visual; una publicación con vídeo queda en **Vídeos**
+aunque X no entregue una miniatura. Las tarjetas muestran además el tipo
+detectado y, si falta la portada, explican que hay que abrirla en X para verla.
+
 **Cuentas.** Añadir, pausar y quitar cuentas de X.
 
 **Ajustes.** Estado de la limpieza —con un botón para forzarla—, las fuentes de
@@ -347,7 +352,9 @@ Get-Content dashboard\var\dashboard.log -Tail 30
 
 - **Los vídeos se ven como miniatura**, no se reproducen dentro del dashboard.
   X publica una imagen de portada y un enlace; el vídeo se ve abriendo la
-  publicación. Incrustar el reproductor obligaría a depender del marcado de X.
+  publicación. Si X no entrega portada, el radar conserva la señal de vídeo y
+  deja la tarjeta lista para abrirla. Incrustar el reproductor obligaría a
+  depender del marcado de X.
 - **Copiar enlace depende del navegador.** En contexto seguro (HTTPS o
   localhost) usa el portapapeles moderno; por HTTP sin cifrar —el caso del móvil
   por Tailscale— recurre a un respaldo, y si el navegador lo bloquea enseña el

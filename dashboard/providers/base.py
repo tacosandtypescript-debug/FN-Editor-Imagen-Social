@@ -32,6 +32,7 @@ class TweetRecord:
     posted_at: str | None = None
     relative_time: str | None = None
     media: list[str] = field(default_factory=list)
+    has_video: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -43,6 +44,7 @@ class TweetRecord:
             "posted_at": self.posted_at,
             "relative_time": self.relative_time,
             "media": list(self.media),
+            "has_video": bool(self.has_video),
         }
 
 

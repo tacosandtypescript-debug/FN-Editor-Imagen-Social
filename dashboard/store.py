@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from . import config
+from . import urls
 from .clock import CLOCK
 
 #: Estados del ciclo de vida de una publicación.
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS tweets (
     posted_at      TEXT,
     relative_time  TEXT,
     media_json     TEXT NOT NULL DEFAULT '[]',
+    has_video      INTEGER NOT NULL DEFAULT 0,
     fetched_at     TEXT NOT NULL,
     status         TEXT NOT NULL DEFAULT 'nuevo',
     status_detail  TEXT,
@@ -205,9 +207,27 @@ class Store:
             ("content_hash", "TEXT"),
             ("processed_at", "TEXT"),
             ("duplicate_of", "TEXT"),
+            ("has_video", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in columns:
                 connection.execute(f"ALTER TABLE tweets ADD COLUMN {name} {kind}")
+
+        # Bases anteriores solo guardaban la URL de la miniatura. Recuperar la
+        # señal de vídeo aquí permite filtrar el histórico sin volver a pedir
+        # cada publicación a un mirror externo.
+        pending_video_rows = connection.execute(
+            "SELECT tweet_id, media_json FROM tweets WHERE COALESCE(has_video, 0) = 0"
+        ).fetchall()
+        for row in pending_video_rows:
+            try:
+                media = json.loads(row["media_json"] or "[]")
+            except json.JSONDecodeError:
+                media = []
+            if any(urls.is_video_url(value) for value in media if isinstance(value, str)):
+                connection.execute(
+                    "UPDATE tweets SET has_video = 1 WHERE tweet_id = ?",
+                    (row["tweet_id"],),
+                )
 
         # El registro de vistos se rellena con lo que ya hubiera en la bandeja:
         # así, al purgar por primera vez, nada vuelve a entrar como nuevo.
@@ -366,6 +386,9 @@ class Store:
                     continue
 
                 media = list(tweet.get("media") or [])
+                has_video = bool(tweet.get("has_video")) or any(
+                    urls.is_video_url(value) for value in media
+                )
                 source_handle = normalise_handle(tweet.get("source_handle", ""))
                 author_handle = normalise_handle(
                     tweet.get("author_handle") or tweet.get("source_handle") or ""
@@ -396,8 +419,8 @@ class Store:
                     INSERT INTO tweets (
                         tweet_id, source_handle, author_handle, text, url,
                         posted_at, relative_time, media_json, fetched_at, status,
-                        content_hash, duplicate_of, status_detail
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        has_video, content_hash, duplicate_of, status_detail
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(tweet_id) DO NOTHING
                     """,
                     (
@@ -411,6 +434,7 @@ class Store:
                         json.dumps(media, ensure_ascii=False),
                         now,
                         status,
+                        int(has_video),
                         digest,
                         duplicate_of,
                         f"contenido ya visto en {duplicate_of}" if duplicate_of else None,
@@ -575,9 +599,33 @@ class Store:
         status: str | None = None,
         source_handle: str | None = None,
         pending_only: bool = False,
+        media_kind: str = "all",
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
+        clauses, params = self._tweet_filters(
+            status=status,
+            source_handle=source_handle,
+            pending_only=pending_only,
+            media_kind=media_kind,
+        )
+        query = "SELECT * FROM tweets"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY COALESCE(posted_at, fetched_at) DESC, rowid DESC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+        with self._cursor() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [_decode_tweet(dict(row)) for row in rows]
+
+    @staticmethod
+    def _tweet_filters(
+        *,
+        status: str | None = None,
+        source_handle: str | None = None,
+        pending_only: bool = False,
+        media_kind: str = "all",
+    ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
         if status and status != "todos":
@@ -591,14 +639,12 @@ class Store:
         if source_handle:
             clauses.append("source_handle = ?")
             params.append(normalise_handle(source_handle))
-        query = "SELECT * FROM tweets"
-        if clauses:
-            query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY COALESCE(posted_at, fetched_at) DESC, rowid DESC LIMIT ? OFFSET ?"
-        params.extend([int(limit), int(offset)])
-        with self._cursor() as connection:
-            rows = connection.execute(query, params).fetchall()
-        return [_decode_tweet(dict(row)) for row in rows]
+        normalized_media = str(media_kind or "all").strip().lower()
+        if normalized_media == "videos":
+            clauses.append("COALESCE(has_video, 0) = 1")
+        elif normalized_media == "images":
+            clauses.append("COALESCE(has_video, 0) = 0 AND media_json NOT IN ('', '[]')")
+        return clauses, params
 
     def get_tweet(self, tweet_id: str) -> dict | None:
         with self._cursor() as connection:
@@ -647,6 +693,36 @@ class Store:
         for row in rows:
             counts[row["status"]] = row["total"]
         return counts
+
+    def count_by_media(
+        self,
+        *,
+        status: str | None = None,
+        source_handle: str | None = None,
+        pending_only: bool = False,
+    ) -> dict[str, int]:
+        """Cuenta las vistas que alimentan las pestañas de medios."""
+        clauses, params = self._tweet_filters(
+            status=status,
+            source_handle=source_handle,
+            pending_only=pending_only,
+        )
+        query = (
+            "SELECT COUNT(*) AS all_total, "
+            "SUM(CASE WHEN COALESCE(has_video, 0) = 0 "
+            "AND media_json NOT IN ('', '[]') THEN 1 ELSE 0 END) AS images_total, "
+            "SUM(CASE WHEN COALESCE(has_video, 0) = 1 THEN 1 ELSE 0 END) AS videos_total "
+            "FROM tweets"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        with self._cursor() as connection:
+            row = connection.execute(query, params).fetchone()
+        return {
+            "all": int(row["all_total"] or 0),
+            "images": int(row["images_total"] or 0),
+            "videos": int(row["videos_total"] or 0),
+        }
 
 
 #: Texto mínimo (sin medios) para fiarse de la huella de contenido. Por debajo
@@ -723,7 +799,10 @@ def _decode_tweet(row: dict) -> dict:
         row["media"] = json.loads(row.get("media_json") or "[]")
     except json.JSONDecodeError:
         row["media"] = []
-    row["has_media"] = bool(row["media"])
+    row["has_video"] = bool(row.get("has_video")) or any(
+        urls.is_video_url(value) for value in row["media"] if isinstance(value, str)
+    )
+    row["has_media"] = bool(row["media"]) or row["has_video"]
     row["is_processed"] = bool(row.get("processed_at")) or row.get("status") in PROCESSED_STATUSES
     row["is_duplicate"] = row.get("status") == STATUS_DUPLICATE
     raw_analysis = row.get("analysis_json")

@@ -111,6 +111,24 @@
           </select>
         </div>
       </div>
+      <div class="media-filter">
+        <span class="field-label">Tipo de publicación</span>
+        <div id="media-tabs" class="media-tabs" role="tablist" aria-label="Filtrar por tipo de publicación">
+          <button id="media-tab-all" class="media-tab" type="button" role="tab" data-media-filter="all"
+                  aria-controls="inbox" aria-selected="true" tabindex="0" onclick="activateMediaFilter('all')">
+            Todas <span id="media-count-all" class="media-tab-count" aria-label="publicaciones">—</span>
+          </button>
+          <button id="media-tab-images" class="media-tab" type="button" role="tab" data-media-filter="images"
+                  aria-controls="inbox" aria-selected="false" tabindex="-1" onclick="activateMediaFilter('images')">
+            Imágenes <span id="media-count-images" class="media-tab-count" aria-label="imágenes">—</span>
+          </button>
+          <button id="media-tab-videos" class="media-tab" type="button" role="tab" data-media-filter="videos"
+                  aria-controls="inbox" aria-selected="false" tabindex="-1" onclick="activateMediaFilter('videos')">
+            Vídeos <span id="media-count-videos" class="media-tab-count" aria-label="vídeos">—</span>
+          </button>
+        </div>
+        <p id="media-filter-note" class="small muted">Todas las publicaciones detectadas.</p>
+      </div>
       <div id="poller-state" class="monitor-line" aria-live="polite"></div>
       <details class="help-details">
         <summary>Cómo funciona esta bandeja</summary>
@@ -118,7 +136,7 @@
       </details>
     </div>
 
-    <div id="inbox" class="feed" aria-live="polite" aria-busy="false"></div>
+    <div id="inbox" class="feed" role="tabpanel" aria-labelledby="media-tab-all" aria-live="polite" aria-busy="false"></div>
     <div id="feed-pagination" class="pagination panel" hidden>
       <div>
         <strong id="feed-summary">—</strong>

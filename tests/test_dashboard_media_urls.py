@@ -68,6 +68,11 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(urls.is_twitter_media(self.BASE))
         self.assertTrue(urls.is_twitter_media("https://video.twimg.com/x.mp4"))
         self.assertFalse(urls.is_twitter_media("https://pbs.twimg.com.evil.com/x.jpg"))
+
+    def test_is_video_url_recognises_video_and_thumbnail_urls(self):
+        self.assertTrue(urls.is_video_url("https://video.twimg.com/amplify_video/1/vid.mp4"))
+        self.assertTrue(urls.is_video_url("https://pbs.twimg.com/ext_tw_video_thumb/1/img/x.jpg"))
+        self.assertFalse(urls.is_video_url("https://pbs.twimg.com/media/photo.jpg"))
         self.assertFalse(urls.is_twitter_media("https://example.com/x.jpg"))
 
     def test_thumbnails_maps_a_list(self):

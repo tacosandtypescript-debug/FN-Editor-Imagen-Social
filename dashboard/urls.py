@@ -25,10 +25,36 @@ THUMB_SIZE = 360
 #: Solo se reescriben las URL de este CDN.
 TWITTER_MEDIA_HOSTS = ("pbs.twimg.com",)
 
+# X suele entregar una imagen de portada para los vídeos. No basta con mirar
+# la extensión: muchas portadas no tienen ninguna pista en el nombre del
+# archivo, pero sí conservan la ruta que las identifica como vídeo.
+VIDEO_URL_MARKERS = (
+    "amplify_video",
+    "video.twimg.com",
+    "ext_tw_video_thumb",
+    "tw_video_thumb",
+    "video_thumb",
+)
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".m3u8")
+
 
 def is_twitter_media(url: str) -> bool:
     host = (urlsplit(str(url)).hostname or "").lower()
     return host in TWITTER_MEDIA_HOSTS or host.endswith(".twimg.com")
+
+
+def is_video_url(url: str) -> bool:
+    """Indica si una URL es un vídeo de X o su miniatura.
+
+    La función es intencionadamente conservadora: una imagen normal de
+    ``pbs.twimg.com/media`` no se convierte en vídeo solo por ser un medio.
+    """
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return False
+    parsed = urlsplit(raw)
+    path = parsed.path.lower()
+    return any(marker in raw for marker in VIDEO_URL_MARKERS) or path.endswith(VIDEO_EXTENSIONS)
 
 
 def thumbnail_url(url: str, size: int = THUMB_SIZE) -> str:

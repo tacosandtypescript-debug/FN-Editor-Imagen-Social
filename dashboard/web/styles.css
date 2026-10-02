@@ -206,6 +206,17 @@ main { width: min(100% - 44px, 1184px); margin: 0 auto; padding: 24px 0 72px; }
 .filters-panel { padding-bottom: 15px; }
 .filters-grid { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.5fr) 120px; gap: 10px; }
 .field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.media-filter { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.field-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.media-tabs { display: flex; gap: 20px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.media-tab { position: relative; display: inline-flex; align-items: baseline; gap: 7px; min-height: 42px; padding: 9px 0 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.media-tab:hover:not(:disabled) { border-color: transparent; background: transparent; color: var(--text); }
+.media-tab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; content: ""; }
+.media-tab.active, .media-tab[aria-selected="true"] { color: var(--text); }
+.media-tab.active::after, .media-tab[aria-selected="true"]::after { background: var(--primary); }
+.media-tab-count { color: var(--subtle); font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.media-tab[aria-selected="true"] .media-tab-count { color: var(--primary); }
+.media-filter > .small { margin: 8px 0 0; }
 input, select { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); outline: 0; background: var(--bg-soft); color: var(--text); }
 input::placeholder { color: var(--subtle); }
 input:hover, select:hover { border-color: #607284; }
@@ -236,6 +247,9 @@ input:focus, select:focus { border-color: var(--primary); }
 .tweet-status { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border: 1px solid #2b6474; border-radius: 5px; color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .tweet-status.ready { border-color: #286b4a; color: var(--success); }
 .tweet-status.duplicate { border-color: #68562d; color: var(--attention); }
+.media-kind { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.media-kind.video { border-color: #6b5428; color: var(--attention); }
+.media-kind.image { border-color: #2b6474; color: var(--primary); }
 .tweet-when { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 12px; }
 .tweet-when strong { color: var(--text); font-weight: 650; }
 .tweet-text { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55; }
@@ -244,6 +258,8 @@ input:focus, select:focus { border-color: var(--primary); }
 .tweet-media img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border: 1px solid var(--line); }
 .tweet-media .shot:hover img { border-color: var(--primary); }
 .video-flag { position: absolute; right: 5px; bottom: 5px; padding: 2px 5px; border-radius: 4px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 10px; line-height: 1.2; }
+.tweet-media-note { display: flex; flex-direction: column; gap: 3px; width: min(100%, 430px); margin-top: 15px; padding: 12px 13px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--bg-soft); color: var(--muted); font-size: 12px; }
+.tweet-media-note strong { color: var(--attention); font-size: 13px; }
 .tweet-actions { display: grid; align-content: start; gap: 7px; }
 .tweet-actions .button { width: 100%; }
 .tweet-actions .action-note { margin: 2px 0 0; color: var(--subtle); font-size: 11px; line-height: 1.35; }
@@ -351,6 +367,7 @@ input:focus, select:focus { border-color: var(--primary); }
   .filters-grid { grid-template-columns: 1fr 1fr; }
   .filters-grid .field:nth-child(2) { grid-column: 1 / -1; grid-row: 1; }
   .field-limit { grid-column: 2; }
+  .media-tabs { gap: 17px; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .count-summary { justify-content: start; text-align: left; }
   .tweet { padding: 15px 14px 15px 17px; }

@@ -30,12 +30,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .. import config
+from .. import urls
 from .base import ProviderError, ProviderStatus, TweetRecord
 
 USER_AGENT = "EditImg-Dashboard/0.1 (+https://github.com/tacosandtypescript-debug/FN-Editor-Imagen-Social)"
 STATUS_IN_TEXT = re.compile(r"/status/(\d+)")
 HANDLE_IN_PATH = re.compile(r"^/([A-Za-z0-9_]{1,20})/")
 IMG_SRC = re.compile(r'<img\b[^>]*?src="([^"]+)"', re.IGNORECASE)
+VIDEO_POSTER = re.compile(r'<video\b[^>]*?poster=["\']([^"\']+)["\']', re.IGNORECASE)
 #: Para limpiar el texto hay que consumir la etiqueta completa; si solo se
 #: recorta hasta `src`, los atributos posteriores quedan como texto visible.
 IMG_TAG_ALL = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
@@ -70,9 +72,24 @@ els => els.map(el => {
     }
   }
   const media = [];
+  let hasVideo = false;
+  const addMedia = (src, video = false) => {
+    if (src && !media.includes(src)) media.push(src);
+    if (video) hasVideo = true;
+  };
   for (const img of el.querySelectorAll('img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/amplify_video_thumb"]')) {
     const src = img.getAttribute('src');
-    if (src && !media.includes(src)) media.push(src);
+    addMedia(src, /(?:amplify_video|ext_tw_video|tw_video)_thumb/i.test(src || ''));
+  }
+  for (const video of el.querySelectorAll('video')) {
+    addMedia(video.getAttribute('poster'), true);
+  }
+  for (const node of el.querySelectorAll('[aria-label], [data-testid]')) {
+    const signal = `${node.getAttribute('aria-label') || ''} ${node.getAttribute('data-testid') || ''}`;
+    if (/video/i.test(signal)) {
+      hasVideo = true;
+      break;
+    }
   }
   const pinned = /pin/i.test(el.textContent.slice(0, 40));
   return {
@@ -82,6 +99,7 @@ els => els.map(el => {
     author: author,
     relative_time: relative,
     media: media.slice(0, 24),
+    has_video: hasVideo,
     pinned: pinned,
   };
 })
@@ -245,6 +263,13 @@ def parse_nitter_rss(body: bytes | str, source_handle: str) -> list[TweetRecord]
             text = title.strip()
 
         media = [html.unescape(src) for src in IMG_SRC.findall(description)]
+        for src in VIDEO_POSTER.findall(description):
+            value = html.unescape(src)
+            if value and value not in media:
+                media.append(value)
+        has_video = bool(
+            re.search(r"<video\b|amplify_video|ext_tw_video|tw_video", description, re.IGNORECASE)
+        ) or any(urls.is_video_url(src) for src in media)
 
         author = _text(item, "creator") or ""
         author = author.lstrip("@").strip() or None
@@ -263,6 +288,7 @@ def parse_nitter_rss(body: bytes | str, source_handle: str) -> list[TweetRecord]
                 posted_at=_iso_from_rfc822(pub_date),
                 relative_time=None,
                 media=media,
+                has_video=has_video,
             )
         )
     return records
@@ -433,6 +459,7 @@ class BrowserTimeline:
                     posted_at=None,
                     relative_time=entry.get("relative_time"),
                     media=[src for src in (entry.get("media") or []) if src],
+                    has_video=bool(entry.get("has_video")),
                 )
             )
         if not records:
@@ -483,8 +510,12 @@ class XApiTimeline:
             ).decode("utf-8")
         )
         media_by_key = {
-            item["media_key"]: (item.get("url") or item.get("preview_image_url"))
+            item["media_key"]: {
+                "url": item.get("url") or item.get("preview_image_url"),
+                "type": str(item.get("type") or "").lower(),
+            }
             for item in ((payload.get("includes") or {}).get("media") or [])
+            if item.get("media_key")
         }
         records: list[TweetRecord] = []
         for item in payload.get("data") or []:
@@ -497,7 +528,11 @@ class XApiTimeline:
                     url=f"https://x.com/{handle}/status/{item['id']}",
                     author_handle=handle,
                     posted_at=item.get("created_at"),
-                    media=[media_by_key[key] for key in keys if media_by_key.get(key)],
+                    media=[media_by_key[key]["url"] for key in keys if media_by_key.get(key, {}).get("url")],
+                    has_video=any(
+                        media_by_key.get(key, {}).get("type") in {"video", "animated_gif", "gif"}
+                        for key in keys
+                    ),
                 )
             )
         return [record.as_dict() for record in records]

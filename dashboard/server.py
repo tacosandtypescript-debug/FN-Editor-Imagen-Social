@@ -289,6 +289,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def get_tweets(self, query, *groups) -> None:
         status = _first(query, "status") or None
         handle = _first(query, "handle") or None
+        media_kind = _first(query, "media").lower() or "all"
+        if media_kind not in {"all", "images", "videos"}:
+            media_kind = "all"
         limit = max(1, min(_int_param(query, "limit", 48), 100))
         offset = _int_param(query, "offset", 0)
         # Por defecto solo se muestra lo pendiente: lo ya procesado y lo
@@ -298,6 +301,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             status=status,
             source_handle=handle,
             pending_only=pending_only,
+            media_kind=media_kind,
             limit=limit + 1,
             offset=offset,
         )
@@ -307,6 +311,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             {
                 "tweets": visible,
                 "counts": self.service.store.count_by_status(),
+                "media_counts": self.service.store.count_by_media(
+                    status=status,
+                    source_handle=handle,
+                    pending_only=pending_only,
+                ),
                 "has_more": has_more,
                 "next_offset": offset + len(visible),
             }

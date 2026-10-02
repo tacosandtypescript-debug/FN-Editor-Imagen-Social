@@ -40,6 +40,7 @@
 | CRUD accounts | Accounts tab + app dialog for delete | `/api/accounts*` | return to list | Full add/pause/delete flow |
 | CRUD | Accounts tab + tweet mutations | `dashboard/web/app.js` + `/api/*` | return to current list | Full mutation flow |
 | Tweet actions | Tweet card action row | `/api/tweets*` | open/copy/conserve; Telegram pending contract | Keyboard, disabled reason, API error |
+| Media filter tabs | `#media-tabs` in the inbox filter rail | `/api/tweets?media=all\|images\|videos` | Replace the current feed | Arrow-key navigation, counts, no-results state |
 
 ## Component behavior
 
@@ -48,13 +49,14 @@
 | Button | Flat role-based surface | Brightness lift | Warm 2px ring | 1px press | Reduced opacity + reason | Stable width + spinner | Toast + retryable state |
 | Input | Graphite field + line | Line brightens | Warm ring | n/a | Reduced opacity | n/a | Inline field message/toast |
 | Search/filter | Committed on change | Same as input | Same | n/a | n/a | List loading state | Toast and preserved filter |
+| Media tabs | Active underline + result count | Text brightens | Warm ring; arrows move focus | Selected underline | n/a | Feed loading state | Toast; selected filter remains |
 | Tweet card | Raised surface + signal edge | Border lift | Action focus | Action press | Action-specific explanation | Button spinner | Toast; card remains usable |
 
 ## Dataset navigation
 
 - Admin tables: None; accounts are a compact operational list.
 - Exploratory lists: Chronological tweet feed.
-- URL state: Active tab in hash; filters are transient for now and reset only on a full reload.
+- URL state: Active tab in hash; filters, including the media tabs, are transient for now and reset only on a full reload.
 - Page size: 48 by default, with explicit “Cargar más”.
 - Empty/no-results/error/loading treatment: App-owned panel for each state, with a direct next step.
 - Back/scroll restoration: Hash navigation preserves the browser page; loading more appends without replacing the current list.
@@ -101,7 +103,7 @@
 ## Validation
 
 - Schema/validation layer: Server-side `DashboardError` plus client-side required account input.
-- Trigger timing: Account validation on submit; filters commit on change.
+- Trigger timing: Account validation on submit; selects commit on change; media tabs commit on click or Enter/Space after arrow-key focus movement.
 - Error summary/inline policy: Toast for API failures; field remains populated for correction.
 - Sensitive-value handling: Tokens never enter HTML or toast content; only configured/not-configured booleans are exposed.
 - Duplicate-submit prevention: Busy state on all mutating controls.
@@ -124,7 +126,7 @@
 
 - Required static commands: Project tests, frontend premium `audit_project.py --mode strict`.
 - Browser/device/locale/theme matrix: Chromium desktop 1440px, narrow mobile viewport, Spanish locale, reduced motion spot-check.
-- Accessibility checks: Keyboard tab order, visible focus, dialog focus return, live-region messages, native select operation.
+- Accessibility checks: Keyboard tab order, visible focus, arrow-key media tabs, dialog focus return, live-region messages, native select operation.
 - Component-state/visual regression coverage: Loading, empty, no-results, error, busy poller, Telegram unavailable, account delete dialog.
 - Project audit command/result: Run after Phase 1 edits; record blockers in the handoff.
 - CRUD full-flow evidence: Add, pause/activate, confirm delete account; no unconfirmed destructive request.

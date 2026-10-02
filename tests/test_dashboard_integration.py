@@ -384,6 +384,23 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(len(listas["tweets"]), 1)
         self.assertEqual(listas["tweets"][0]["status"], STATUS_READY)
 
+    def test_media_tabs_are_backed_by_the_api_filter(self):
+        self.service.store.upsert_tweets(
+            [
+                {
+                    "tweet_id": "video-only",
+                    "source_handle": "cuenta",
+                    "text": "publicación con vídeo sin miniatura",
+                    "url": "https://x.com/cuenta/status/video-only",
+                    "has_video": True,
+                }
+            ]
+        )
+        status, payload = self.call("GET", "/api/tweets?pending=0&media=videos&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual([tweet["tweet_id"] for tweet in payload["tweets"]], ["video-only"])
+        self.assertEqual(payload["media_counts"]["videos"], 1)
+
 
 
 

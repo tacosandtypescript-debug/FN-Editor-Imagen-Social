@@ -127,9 +127,11 @@ carry the full meaning alone.
 ### Navigation and data display
 
 The three routes are Bandeja, Cuentas, and Sistema. Tabs are URL-hash addressable
-and expose `aria-selected`/`aria-controls`. Publications are chronological
-cards grouped by day, with the newest first. Counts are concise operational
-readouts, not a dump of internal legacy statuses.
+and expose `aria-selected`/`aria-controls`. Bandeja adds a quiet secondary tab
+rail for Todas, Imágenes, and Vídeos; it uses the same underline language and
+server-backed counts so a video without a thumbnail is still discoverable.
+Publications are chronological cards grouped by day, with the newest first.
+Counts are concise operational readouts, not a dump of internal legacy statuses.
 
 ### Forms and overlays
 

@@ -381,6 +381,8 @@ class DashboardService:
                 tweet["text"] = info["post_text"]
             if info.get("media_urls"):
                 tweet["media"] = info["media_urls"]
+            if info.get("has_video"):
+                tweet["has_video"] = True
 
     # ------------------------------------------------------------------
     # Publicaciones
@@ -404,7 +406,10 @@ class DashboardService:
         """
         medios = list(tweet.get("media") or [])
         tweet["thumbs"] = urls.thumbnails(medios)
-        tweet["has_video"] = any("amplify_video" in str(url) for url in medios)
+        tweet["has_video"] = bool(tweet.get("has_video")) or any(
+            urls.is_video_url(url) for url in medios
+        )
+        tweet["has_media"] = bool(medios) or tweet["has_video"]
         return tweet
 
     def mark_ready(self, tweet_id: str) -> dict:
