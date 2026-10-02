@@ -29,9 +29,23 @@ _DATE_KEYS = ("created_at", "date", "createdAt", "tweet_created_at", "published_
 #: Mirrors que devuelven el JSON del post sin necesidad de credenciales.
 API_HOSTS = ("api.vxtwitter.com", "api.fxtwitter.com")
 VIDEO_TYPES = {"video", "animated_gif", "gif"}
+VIDEO_URL_KEYS = {
+    "url",
+    "video_url",
+    "media_url",
+    "media_url_https",
+    "src",
+    "source",
+    "thumbnail_url",
+    "preview_image_url",
+    "media",
+    "media_urls",
+    "mediaurls",
+    "attachments",
+}
 
 
-def _payload_has_video(payload) -> bool:
+def _payload_has_video(payload, key: str | None = None) -> bool:
     """Busca vídeo también cuando el mirror no entrega una miniatura.
 
     Vx/FxTwitter usan varias formas de respuesta. Se revisan tanto los tipos
@@ -42,13 +56,16 @@ def _payload_has_video(payload) -> bool:
         media_type = str(payload.get("type") or payload.get("media_type") or "").lower()
         if media_type in VIDEO_TYPES:
             return True
-        for value in payload.values():
-            if _payload_has_video(value):
+        for name, value in payload.items():
+            field = str(name or "").lower()
+            if isinstance(value, str) and field in VIDEO_URL_KEYS and urls.is_video_url(value):
+                return True
+            if isinstance(value, (dict, list)) and _payload_has_video(value, field):
                 return True
         return False
     if isinstance(payload, list):
-        return any(_payload_has_video(value) for value in payload)
-    if isinstance(payload, str):
+        return any(_payload_has_video(value, key) for value in payload)
+    if isinstance(payload, str) and key in VIDEO_URL_KEYS:
         return urls.is_video_url(payload)
     return False
 

@@ -406,6 +406,9 @@ class DashboardService:
         """
         medios = list(tweet.get("media") or [])
         tweet["thumbs"] = urls.thumbnails(medios)
+        tweet["media_types"] = [
+            "video" if urls.is_video_url(url) else "image" for url in medios
+        ]
         tweet["has_video"] = bool(tweet.get("has_video")) or any(
             urls.is_video_url(url) for url in medios
         )

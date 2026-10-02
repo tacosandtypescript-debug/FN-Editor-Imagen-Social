@@ -40,7 +40,7 @@
 | CRUD accounts | Accounts tab + app dialog for delete | `/api/accounts*` | return to list | Full add/pause/delete flow |
 | CRUD | Accounts tab + tweet mutations | `dashboard/web/app.js` + `/api/*` | return to current list | Full mutation flow |
 | Tweet actions | Tweet card action row | `/api/tweets*` | open/copy/conserve; Telegram pending contract | Keyboard, disabled reason, API error |
-| Media filter tabs | `#media-tabs` in the inbox filter rail | `/api/tweets?media=all\|images\|videos` | Replace the current feed | Arrow-key navigation, counts, no-results state |
+| Media filter tabs | `#media-tabs` in the inbox filter rail | `/api/tweets?media=all\|images\|videos` | Replace the current feed; mixed image/video posts belong to `videos` | Arrow-key navigation, counts, no-results state |
 
 ## Component behavior
 

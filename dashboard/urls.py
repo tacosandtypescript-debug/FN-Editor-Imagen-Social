@@ -28,13 +28,21 @@ TWITTER_MEDIA_HOSTS = ("pbs.twimg.com",)
 # X suele entregar una imagen de portada para los vídeos. No basta con mirar
 # la extensión: muchas portadas no tienen ninguna pista en el nombre del
 # archivo, pero sí conservan la ruta que las identifica como vídeo.
-VIDEO_URL_MARKERS = (
-    "amplify_video",
-    "video.twimg.com",
-    "ext_tw_video_thumb",
-    "tw_video_thumb",
-    "video_thumb",
+#
+# Se comprueba la ruta, no la URL completa. Así una palabra como
+# ``video_thumb`` dentro de un parámetro o de un nombre arbitrario no convierte
+# una foto en vídeo por accidente.
+VIDEO_PATH_MARKERS = (
+    "/amplify_video/",
+    "/amplify_video_thumb/",
+    "/ext_tw_video/",
+    "/ext_tw_video_thumb/",
+    "/tweet_video/",
+    "/tweet_video_thumb/",
+    "/tw_video/",
+    "/tw_video_thumb/",
 )
+VIDEO_HOSTS = ("video.twimg.com",)
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".m3u8")
 
 
@@ -49,12 +57,17 @@ def is_video_url(url: str) -> bool:
     La función es intencionadamente conservadora: una imagen normal de
     ``pbs.twimg.com/media`` no se convierte en vídeo solo por ser un medio.
     """
-    raw = str(url or "").strip().lower()
+    raw = str(url or "").strip()
     if not raw:
         return False
-    parsed = urlsplit(raw)
-    path = parsed.path.lower()
-    return any(marker in raw for marker in VIDEO_URL_MARKERS) or path.endswith(VIDEO_EXTENSIONS)
+    parsed = urlsplit(raw.lower())
+    host = (parsed.hostname or "").lower()
+    path = parsed.path
+    return (
+        host in VIDEO_HOSTS
+        or path.endswith(VIDEO_EXTENSIONS)
+        or any(marker in path for marker in VIDEO_PATH_MARKERS)
+    )
 
 
 def thumbnail_url(url: str, size: int = THUMB_SIZE) -> str:

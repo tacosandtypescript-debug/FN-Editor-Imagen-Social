@@ -229,7 +229,7 @@ function renderMediaTabs(mediaCounts = app.mediaCounts) {
     const notes = {
       all: "Todas las publicaciones detectadas.",
       images: "Solo publicaciones con imágenes, sin vídeo.",
-      videos: "Publicaciones que contienen vídeo, tengan o no miniatura.",
+      videos: "Cada tarjeta tiene al menos un vídeo; si además trae imágenes, se muestran junto a él.",
     };
     note.textContent = notes[app.mediaFilter] || notes.all;
   }
@@ -458,9 +458,13 @@ function dayLabel(shortDate) {
 
 function tweetCard(tweet) {
   const list = tweet.thumbs && tweet.thumbs.length ? tweet.thumbs : (tweet.media || []);
-  const media = list.slice(0, 6).map((url) =>
-    `<a href="${escapeHtml(tweet.url || "#")}" target="_blank" rel="noopener" class="shot"><img src="${escapeHtml(url)}" alt="Miniatura de @${escapeHtml(tweet.author_handle || tweet.source_handle)}" loading="lazy" referrerpolicy="no-referrer">${tweet.has_video ? '<span class="video-flag">vídeo</span>' : ""}</a>`
-  ).join("");
+  const mediaTypes = Array.isArray(tweet.media_types) ? tweet.media_types : [];
+  const media = list.slice(0, 6).map((url, index) => {
+    const isVideoMedia = mediaTypes[index] === "video";
+    const alt = isVideoMedia ? "Miniatura de vídeo" : "Imagen";
+    const badge = isVideoMedia ? '<span class="video-flag">▶ vídeo</span>' : "";
+    return `<a href="${escapeHtml(tweet.url || "#")}" target="_blank" rel="noopener" class="shot${isVideoMedia ? " video" : ""}"><img src="${escapeHtml(url)}" alt="${alt} de @${escapeHtml(tweet.author_handle || tweet.source_handle)}" loading="lazy" referrerpolicy="no-referrer">${badge}</a>`;
+  }).join("");
   const mediaKind = tweet.has_video ? "video" : tweet.has_media ? "image" : "text";
   const mediaLabel = tweet.has_video ? "Vídeo" : tweet.has_media ? "Imagen" : "Texto";
   const mediaPreview = media || (tweet.has_video

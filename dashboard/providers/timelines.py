@@ -38,6 +38,8 @@ STATUS_IN_TEXT = re.compile(r"/status/(\d+)")
 HANDLE_IN_PATH = re.compile(r"^/([A-Za-z0-9_]{1,20})/")
 IMG_SRC = re.compile(r'<img\b[^>]*?src="([^"]+)"', re.IGNORECASE)
 VIDEO_POSTER = re.compile(r'<video\b[^>]*?poster=["\']([^"\']+)["\']', re.IGNORECASE)
+VIDEO_SRC = re.compile(r'<(?:video|source)\b[^>]*?src=["\']([^"\']+)["\']', re.IGNORECASE)
+VIDEO_TAG = re.compile(r"<video\b", re.IGNORECASE)
 #: Para limpiar el texto hay que consumir la etiqueta completa; si solo se
 #: recorta hasta `src`, los atributos posteriores quedan como texto visible.
 IMG_TAG_ALL = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
@@ -77,16 +79,20 @@ els => els.map(el => {
     if (src && !media.includes(src)) media.push(src);
     if (video) hasVideo = true;
   };
-  for (const img of el.querySelectorAll('img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/amplify_video_thumb"]')) {
+  for (const img of el.querySelectorAll('img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/amplify_video_thumb"], img[src*="pbs.twimg.com/ext_tw_video_thumb"], img[src*="pbs.twimg.com/tw_video_thumb"], img[src*="pbs.twimg.com/tweet_video_thumb"]')) {
     const src = img.getAttribute('src');
-    addMedia(src, /(?:amplify_video|ext_tw_video|tw_video)_thumb/i.test(src || ''));
+    addMedia(src, /\/(?:amplify_video|ext_tw_video|tw_video|tweet_video)_thumb(?:\/|$)/i.test(src || ''));
   }
   for (const video of el.querySelectorAll('video')) {
     addMedia(video.getAttribute('poster'), true);
   }
-  for (const node of el.querySelectorAll('[aria-label], [data-testid]')) {
-    const signal = `${node.getAttribute('aria-label') || ''} ${node.getAttribute('data-testid') || ''}`;
-    if (/video/i.test(signal)) {
+  // X sometimes mounts a player without exposing a <video> element yet. Keep
+  // this fallback deliberately narrow; scanning every aria-label/data-testid
+  // caused image-only posts to become videos when an unrelated UI attribute
+  // happened to contain the word "video".
+  for (const node of el.querySelectorAll('[data-testid]')) {
+    const signal = node.getAttribute('data-testid') || '';
+    if (/^(?:videoPlayer|videoPlayback|tweetVideo|videoComponent)$/i.test(signal)) {
       hasVideo = true;
       break;
     }
@@ -263,13 +269,13 @@ def parse_nitter_rss(body: bytes | str, source_handle: str) -> list[TweetRecord]
             text = title.strip()
 
         media = [html.unescape(src) for src in IMG_SRC.findall(description)]
-        for src in VIDEO_POSTER.findall(description):
+        for src in (*VIDEO_POSTER.findall(description), *VIDEO_SRC.findall(description)):
             value = html.unescape(src)
             if value and value not in media:
                 media.append(value)
-        has_video = bool(
-            re.search(r"<video\b|amplify_video|ext_tw_video|tw_video", description, re.IGNORECASE)
-        ) or any(urls.is_video_url(src) for src in media)
+        has_video = bool(VIDEO_TAG.search(description)) or any(
+            urls.is_video_url(src) for src in media
+        )
 
         author = _text(item, "creator") or ""
         author = author.lstrip("@").strip() or None

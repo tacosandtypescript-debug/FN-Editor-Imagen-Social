@@ -72,8 +72,13 @@ class ThumbnailTests(unittest.TestCase):
     def test_is_video_url_recognises_video_and_thumbnail_urls(self):
         self.assertTrue(urls.is_video_url("https://video.twimg.com/amplify_video/1/vid.mp4"))
         self.assertTrue(urls.is_video_url("https://pbs.twimg.com/ext_tw_video_thumb/1/img/x.jpg"))
+        self.assertTrue(urls.is_video_url("https://pbs.twimg.com/tweet_video_thumb/1/img/x.jpg"))
         self.assertFalse(urls.is_video_url("https://pbs.twimg.com/media/photo.jpg"))
         self.assertFalse(urls.is_twitter_media("https://example.com/x.jpg"))
+
+    def test_video_words_in_a_photo_name_or_query_do_not_promote_it(self):
+        self.assertFalse(urls.is_video_url("https://pbs.twimg.com/media/video_thumb.jpg"))
+        self.assertFalse(urls.is_video_url("https://pbs.twimg.com/media/photo.jpg?label=video_thumb"))
 
     def test_thumbnails_maps_a_list(self):
         result = urls.thumbnails([self.BASE, "https://example.com/a.jpg"])

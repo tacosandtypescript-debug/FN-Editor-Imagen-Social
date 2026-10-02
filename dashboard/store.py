@@ -229,6 +229,40 @@ class Store:
                     (row["tweet_id"],),
                 )
 
+        # La primera versión de la señal también podía marcar una publicación
+        # solo con imágenes por un atributo de interfaz que contenía la palabra
+        # «video». Reconciliar una vez el histórico usando únicamente las URL
+        # de medios limpia esas filas sin tocar futuras señales explícitas de la
+        # API (que pueden tener una portada genérica).
+        cleanup_key = "migration.video_flags_v2"
+        cleanup_done = connection.execute(
+            "SELECT 1 FROM settings WHERE key = ?", (cleanup_key,)
+        ).fetchone()
+        if not cleanup_done:
+            flagged_rows = connection.execute(
+                "SELECT tweet_id, media_json FROM tweets WHERE COALESCE(has_video, 0) = 1"
+            ).fetchall()
+            for row in flagged_rows:
+                try:
+                    media = json.loads(row["media_json"] or "[]")
+                except json.JSONDecodeError:
+                    media = []
+                # Si no hay miniatura no podemos contradecir una señal explícita
+                # de vídeo. En publicaciones con medios, en cambio, basta con
+                # que una sola URL sea una portada o un archivo de vídeo.
+                if media and not any(
+                    urls.is_video_url(value) for value in media if isinstance(value, str)
+                ):
+                    connection.execute(
+                        "UPDATE tweets SET has_video = 0 WHERE tweet_id = ?",
+                        (row["tweet_id"],),
+                    )
+            connection.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (cleanup_key, utcnow()),
+            )
+
         # El registro de vistos se rellena con lo que ya hubiera en la bandeja:
         # así, al purgar por primera vez, nada vuelve a entrar como nuevo.
         connection.execute(
@@ -802,6 +836,11 @@ def _decode_tweet(row: dict) -> dict:
     row["has_video"] = bool(row.get("has_video")) or any(
         urls.is_video_url(value) for value in row["media"] if isinstance(value, str)
     )
+    row["media_types"] = [
+        "video" if urls.is_video_url(value) else "image"
+        for value in row["media"]
+        if isinstance(value, str)
+    ]
     row["has_media"] = bool(row["media"]) or row["has_video"]
     row["is_processed"] = bool(row.get("processed_at")) or row.get("status") in PROCESSED_STATUSES
     row["is_duplicate"] = row.get("status") == STATUS_DUPLICATE

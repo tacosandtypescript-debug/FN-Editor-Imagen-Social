@@ -228,6 +228,9 @@ Debajo está el filtro de tipo: **Todas**, **Imágenes** y **Vídeos**. Es un fi
 real del servidor, no solo visual; una publicación con vídeo queda en **Vídeos**
 aunque X no entregue una miniatura. Las tarjetas muestran además el tipo
 detectado y, si falta la portada, explican que hay que abrirla en X para verla.
+Si una publicación trae imagen y vídeo, entra en **Vídeos**; dentro de la
+tarjeta cada miniatura conserva su propio tipo, para que una imagen acompañante
+no se confunda con el vídeo.
 
 **Cuentas.** Añadir, pausar y quitar cuentas de X.
 

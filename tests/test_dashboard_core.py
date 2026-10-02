@@ -147,12 +147,25 @@ class StoreTests(unittest.TestCase):
             [
                 {"tweet_id": "img", "source_handle": "c", "media": ["https://pbs.twimg.com/media/a.jpg"]},
                 {"tweet_id": "vid", "source_handle": "c", "has_video": True},
+                {
+                    "tweet_id": "mixed",
+                    "source_handle": "c",
+                    "media": [
+                        "https://pbs.twimg.com/media/photo.jpg",
+                        "https://pbs.twimg.com/amplify_video_thumb/1/img/poster.jpg",
+                    ],
+                },
                 {"tweet_id": "txt", "source_handle": "c", "text": "solo texto"},
             ]
         )
         self.assertEqual([tweet["tweet_id"] for tweet in self.store.list_tweets(media_kind="images")], ["img"])
-        self.assertEqual([tweet["tweet_id"] for tweet in self.store.list_tweets(media_kind="videos")], ["vid"])
-        self.assertEqual(self.store.count_by_media(), {"all": 3, "images": 1, "videos": 1})
+        self.assertEqual(
+            {tweet["tweet_id"] for tweet in self.store.list_tweets(media_kind="videos")},
+            {"vid", "mixed"},
+        )
+        mixed = self.store.get_tweet("mixed")
+        self.assertEqual(mixed["media_types"], ["image", "video"])
+        self.assertEqual(self.store.count_by_media(), {"all": 4, "images": 1, "videos": 2})
         self.assertTrue(self.store.get_tweet("vid")["has_media"])
 
 
@@ -200,6 +213,17 @@ class NitterParsingTests(unittest.TestCase):
         record = timeline_providers.parse_nitter_rss(rss, source_handle="c")[0]
         self.assertTrue(record.has_video)
         self.assertIn("ext_tw_video_thumb", record.media[0])
+
+    def test_video_word_in_text_does_not_promote_an_image(self):
+        rss = """<?xml version="1.0"?>
+        <rss><channel><item>
+          <title>Foto con texto sobre video_thumb</title>
+          <description><![CDATA[<p>Una foto cuyo texto menciona tw_video</p><img src="https://pbs.twimg.com/media/photo.jpg" />]]></description>
+          <guid>2105562614461776337</guid>
+          <link>https://nitter.example/cuenta/status/2105562614461776337</link>
+        </item></channel></rss>"""
+        record = timeline_providers.parse_nitter_rss(rss, source_handle="cuenta")[0]
+        self.assertFalse(record.has_video)
 
 
 class SeenRegistryTests(unittest.TestCase):
